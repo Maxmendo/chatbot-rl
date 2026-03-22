@@ -1,21 +1,17 @@
 """
-QUILMES BOT — bot.py (versión con Groq + Email)
+QUILMES BOT — bot.py (versión con Groq + SendGrid)
 Bot de reporte periodístico para Refugio Latinoamericano
 
 Variables de entorno necesarias:
   TELEGRAM_BOT_TOKEN  → token de @BotFather
   GROQ_API_KEY        → API key gratuita de console.groq.com
-  GMAIL_USER          → email de Gmail de Refugio
-  GMAIL_PASSWORD      → contraseña de aplicación de 16 caracteres
-  EDITORIAL_EMAIL     → email del equipo editorial (opcional, usa GMAIL_USER si no está)
+  SENDGRID_API_KEY    → API key de SendGrid (SG.xxx)
+  EDITORIAL_EMAIL     → email del equipo editorial donde llegan los borradores
 """
 
 import os
 import logging
-import smtplib
 import requests
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
@@ -126,25 +122,18 @@ def generar_con_groq(respuestas: dict, nombre: str, fotos: int) -> str:
         return "❌ Error al conectar con la IA. Intentá de nuevo con /start."
 
 
-# ── ENVÍO POR EMAIL ───────────────────────────────────────────────────
+# ── ENVÍO POR SENDGRID ────────────────────────────────────────────────
 
-def enviar_por_email(borrador: str, nombre: str, titulo: str) -> bool:
-    """Envía el borrador por email al equipo editorial."""
-    gmail_user = os.getenv("GMAIL_USER")
-    gmail_password = os.getenv("GMAIL_PASSWORD")
-    editorial_email = os.getenv("EDITORIAL_EMAIL", gmail_user)
+def enviar_con_sendgrid(borrador: str, nombre: str, titulo: str) -> bool:
+    """Envía el borrador por email usando SendGrid API."""
+    api_key = os.getenv("SENDGRID_API_KEY")
+    editorial_email = os.getenv("EDITORIAL_EMAIL")
 
-    if not gmail_user or not gmail_password:
-        logger.warning("Gmail no configurado — saltando envío de email.")
+    if not api_key or not editorial_email:
+        logger.warning("SendGrid no configurado completamente.")
         return False
 
-    try:
-        msg = MIMEMultipart()
-        msg["From"] = gmail_user
-        msg["To"] = editorial_email
-        msg["Subject"] = f"[BORRADOR] {titulo} — Reporte de {nombre}"
-
-        cuerpo = f"""BORRADOR PERIODÍSTICO — REFUGIO LATINOAMERICANO
+    cuerpo = f"""BORRADOR PERIODÍSTICO — REFUGIO LATINOAMERICANO
 Pendiente de revisión editorial antes de publicar.
 
 Periodista/colaborador: {nombre}
@@ -156,17 +145,36 @@ Periodista/colaborador: {nombre}
 Este borrador fue generado por Quilmes Bot.
 No publicar sin revisión editorial.
 """
-        msg.attach(MIMEText(cuerpo, "plain", "utf-8"))
 
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-            server.login(gmail_user, gmail_password)
-            server.sendmail(gmail_user, editorial_email, msg.as_string())
+    payload = {
+        "personalizations": [
+            {"to": [{"email": editorial_email}]}
+        ],
+        "from": {"email": editorial_email, "name": "Quilmes Bot — Refugio LA"},
+        "subject": f"[BORRADOR] {titulo} — Reporte de {nombre}",
+        "content": [
+            {"type": "text/plain", "value": cuerpo}
+        ]
+    }
 
-        logger.info(f"Email enviado a {editorial_email}")
-        return True
-
+    try:
+        response = requests.post(
+            "https://api.sendgrid.com/v3/mail/send",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json"
+            },
+            json=payload,
+            timeout=30
+        )
+        if response.status_code in [200, 202]:
+            logger.info(f"Email enviado via SendGrid a {editorial_email}")
+            return True
+        else:
+            logger.error(f"Error SendGrid {response.status_code}: {response.text}")
+            return False
     except Exception as e:
-        logger.error(f"Error email: {e}")
+        logger.error(f"Error SendGrid: {e}")
         return False
 
 
@@ -287,28 +295,25 @@ async def cmd_generar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     nombre = context.user_data.get("nombre", "colaborador/a")
     respuestas = context.user_data.get("respuestas", {})
 
-    # Generar borrador
     borrador = generar_con_groq(respuestas, nombre, fotos)
     titulo = extraer_titulo(borrador)
 
-    # Enviar en Telegram
     for i in range(0, len(borrador), 4000):
         await update.message.reply_text(borrador[i:i + 4000])
 
-    # Enviar por email
     await update.message.reply_text(
         "📧 _Enviando al equipo editorial..._",
         parse_mode="Markdown"
     )
 
-    enviado = enviar_por_email(borrador, nombre, titulo)
+    enviado = enviar_con_sendgrid(borrador, nombre, titulo)
 
     if enviado:
-        editorial_email = os.getenv("EDITORIAL_EMAIL", os.getenv("GMAIL_USER", "el equipo"))
+        editorial_email = os.getenv("EDITORIAL_EMAIL", "el equipo")
         await update.message.reply_text(
-            f"✅ *Borrador enviado por email.*\n\n"
-            f"📬 Llegó a: {editorial_email}\n\n"
-            f"_El equipo editorial lo revisará antes de publicar._\n\n"
+            f"✅ *Borrador enviado al equipo editorial.*\n\n"
+            f"📬 Destino: {editorial_email}\n\n"
+            f"_El equipo lo revisará antes de publicar._\n\n"
             f"_Escribí /start para un nuevo reporte._",
             parse_mode="Markdown"
         )
@@ -380,7 +385,7 @@ def main():
     app.add_handler(conv)
     app.add_handler(CommandHandler("ayuda", ayuda))
 
-    logger.info("Quilmes Bot corriendo con Groq + Email...")
+    logger.info("Quilmes Bot corriendo con Groq + SendGrid...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
