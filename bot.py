@@ -151,10 +151,10 @@ def publicar_en_drive(borrador: str, nombre: str, titulo: str) -> str:
         # Nombre del documento
         nombre_doc = f"[BORRADOR] {titulo} — {nombre}"
 
-        # Crear el documento en Drive
+        # Crear archivo de texto plano en la carpeta compartida
+        # Usamos text/plain para evitar problemas de cuota de Google Docs
         file_metadata = {
-            "name": nombre_doc,
-            "mimeType": "application/vnd.google-apps.document",
+            "name": nombre_doc + ".txt",
             "parents": [folder_id]
         }
         media = MediaInMemoryUpload(
