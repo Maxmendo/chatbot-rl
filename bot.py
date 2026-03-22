@@ -1,10 +1,10 @@
 """
-QUILMES BOT — bot.py (versión con Google Gemini - gratuito)
+QUILMES BOT — bot.py (versión con Groq - gratuito y rápido)
 Bot de reporte periodístico para Refugio Latinoamericano
 
 Variables de entorno necesarias:
   TELEGRAM_BOT_TOKEN  → token de @BotFather
-  GEMINI_API_KEY      → API key gratuita de aistudio.google.com
+  GROQ_API_KEY        → API key gratuita de console.groq.com
 """
 
 import os
@@ -49,8 +49,9 @@ ESTILO EDITORIAL:
 - Voz activa, párrafos cortos (máximo 4 oraciones)
 - Títulos directos, sin clickbait
 - Perspectiva de género cuando corresponda
+- Tono comprometido pero riguroso
 
-ESTRUCTURA OBLIGATORIA DE RESPUESTA:
+ESTRUCTURA OBLIGATORIA:
 1. TÍTULO: (máximo 12 palabras, sin punto final)
 2. COPETE: (2-3 oraciones: qué, quién, dónde, relevancia)
 3. DESARROLLO: (3-5 párrafos: cómo, por qué, contexto)
@@ -60,14 +61,16 @@ ESTRUCTURA OBLIGATORIA DE RESPUESTA:
    - [VERIFICAR] dato 1
    - [VERIFICAR] dato 2
 7. ETIQUETAS SUGERIDAS: etiqueta1, etiqueta2, etiqueta3
-8. NOTAS PARA EL EDITOR/A: observaciones sobre solidez del material"""
+8. NOTAS PARA EL EDITOR/A: observaciones sobre solidez del material
+
+Marcá con [VERIFICAR] cualquier dato que no pueda confirmarse solo con lo aportado."""
 
 
-def generar_con_gemini(respuestas: dict, nombre: str, fotos: int) -> str:
-    """Llama a la API gratuita de Google Gemini para generar el borrador."""
-    api_key = os.getenv("GEMINI_API_KEY")
+def generar_con_groq(respuestas: dict, nombre: str, fotos: int) -> str:
+    """Llama a la API gratuita de Groq para generar el borrador."""
+    api_key = os.getenv("GROQ_API_KEY")
     if not api_key:
-        return "❌ Falta la variable GEMINI_API_KEY en Railway."
+        return "❌ Falta la variable GROQ_API_KEY en Railway."
 
     etiquetas = {
         "que": "QUÉ", "quien": "QUIÉN", "cuando": "CUÁNDO",
@@ -78,34 +81,38 @@ def generar_con_gemini(respuestas: dict, nombre: str, fotos: int) -> str:
         for k, v in etiquetas.items()
     )
 
-    prompt_completo = (
-        f"{SYSTEM_PROMPT}\n\n"
+    user_msg = (
         f"DATOS DEL REPORTE:\n{datos}\n"
         f"Periodista: {nombre}\n"
         f"Fotos adjuntas: {fotos}\n\n"
         "Redactá el borrador periodístico completo siguiendo la estructura."
     )
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}"
-
-    payload = {
-        "contents": [
-            {"parts": [{"text": prompt_completo}]}
-        ],
-        "generationConfig": {
-            "temperature": 0.7,
-            "maxOutputTokens": 2500,
-        }
-    }
-
     try:
-        response = requests.post(url, json=payload, timeout=60)
+        response = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": "llama-3.3-70b-versatile",
+                "messages": [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": user_msg}
+                ],
+                "max_tokens": 2500,
+                "temperature": 0.7
+            },
+            timeout=60
+        )
+
         data = response.json()
 
-        if "candidates" in data and data["candidates"]:
-            return data["candidates"][0]["content"]["parts"][0]["text"]
+        if "choices" in data and data["choices"]:
+            return data["choices"][0]["message"]["content"]
         elif "error" in data:
-            logger.error(f"Error Gemini: {data['error']}")
+            logger.error(f"Error Groq: {data['error']}")
             return f"❌ Error de API: {data['error'].get('message', 'Error desconocido')}"
         else:
             return "❌ No se pudo generar el borrador. Intentá de nuevo con /start."
@@ -113,7 +120,7 @@ def generar_con_gemini(respuestas: dict, nombre: str, fotos: int) -> str:
     except requests.Timeout:
         return "❌ La generación tardó demasiado. Intentá de nuevo con /start."
     except Exception as e:
-        logger.error(f"Error llamada Gemini: {e}")
+        logger.error(f"Error llamada Groq: {e}")
         return "❌ Error al conectar con la IA. Intentá de nuevo con /start."
 
 
@@ -155,7 +162,6 @@ async def handle_inicio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 
 
 async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Avisa que los audios no están disponibles en esta versión."""
     await update.message.reply_text(
         "🎙️ _Los audios se activarán en la próxima versión._\n\n"
         "Por ahora respondé la pregunta en texto, por favor.",
@@ -220,17 +226,16 @@ async def cmd_generar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         return ESPERANDO_FOTOS
 
     await update.message.reply_text(
-        "⏳ *Generando borrador...*\n_Tarda entre 15 y 30 segundos._",
+        "⏳ *Generando borrador...*\n_Tarda entre 10 y 20 segundos._",
         parse_mode="Markdown"
     )
 
-    borrador = generar_con_gemini(
+    borrador = generar_con_groq(
         context.user_data.get("respuestas", {}),
         context.user_data.get("nombre", "colaborador/a"),
         fotos
     )
 
-    # Enviar en partes si supera el límite de Telegram (4096 chars)
     for i in range(0, len(borrador), 4000):
         await update.message.reply_text(borrador[i:i + 4000])
 
@@ -300,7 +305,7 @@ def main():
     app.add_handler(conv)
     app.add_handler(CommandHandler("ayuda", ayuda))
 
-    logger.info("Quilmes Bot corriendo con Gemini (gratuito)...")
+    logger.info("Quilmes Bot corriendo con Groq...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
