@@ -140,14 +140,23 @@ def publicar_en_drive(borrador: str, nombre: str, titulo: str) -> str:
         from googleapiclient.discovery import build
         from googleapiclient.http import MediaInMemoryUpload
 
-        # Cargar credenciales desde la variable de entorno
-        # Normalizar saltos de línea que Railway puede escapar
-        credentials_json = credentials_json.replace('\\n', '\n')
-        creds_dict = json.loads(credentials_json)
-        creds = service_account.Credentials.from_service_account_info(
-            creds_dict,
-            scopes=["https://www.googleapis.com/auth/drive"]
-        )
+        # Cargar credenciales desde archivo o variable de entorno
+        creds = None
+        if os.path.exists("credentials.json"):
+            creds = service_account.Credentials.from_service_account_file(
+                "credentials.json",
+                scopes=["https://www.googleapis.com/auth/drive"]
+            )
+        elif credentials_json:
+            credentials_json = credentials_json.replace('\\n', '\n')
+            creds_dict = json.loads(credentials_json)
+            creds = service_account.Credentials.from_service_account_info(
+                creds_dict,
+                scopes=["https://www.googleapis.com/auth/drive"]
+            )
+        if not creds:
+            logger.error("No se encontraron credenciales de Google")
+            return None
         service = build("drive", "v3", credentials=creds)
 
         # Nombre del documento
