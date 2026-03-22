@@ -141,6 +141,8 @@ def publicar_en_drive(borrador: str, nombre: str, titulo: str) -> str:
         from googleapiclient.http import MediaInMemoryUpload
 
         # Cargar credenciales desde la variable de entorno
+        # Normalizar saltos de línea que Railway puede escapar
+        credentials_json = credentials_json.replace('\\n', '\n')
         creds_dict = json.loads(credentials_json)
         creds = service_account.Credentials.from_service_account_info(
             creds_dict,
