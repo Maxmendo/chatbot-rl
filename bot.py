@@ -1,15 +1,19 @@
 """
-QUILMES BOT — bot.py (versión con Groq - gratuito y rápido)
+QUILMES BOT — bot.py (versión con Groq + Google Drive)
 Bot de reporte periodístico para Refugio Latinoamericano
 
 Variables de entorno necesarias:
-  TELEGRAM_BOT_TOKEN  → token de @BotFather
-  GROQ_API_KEY        → API key gratuita de console.groq.com
+  TELEGRAM_BOT_TOKEN    → token de @BotFather
+  GROQ_API_KEY          → API key gratuita de console.groq.com
+  GOOGLE_CREDENTIALS    → contenido del archivo JSON de la cuenta de servicio
+  GDRIVE_FOLDER_ID      → ID de la carpeta de Google Drive
 """
 
 import os
+import json
 import logging
 import requests
+import tempfile
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
@@ -66,8 +70,9 @@ ESTRUCTURA OBLIGATORIA:
 Marcá con [VERIFICAR] cualquier dato que no pueda confirmarse solo con lo aportado."""
 
 
+# ── GENERACIÓN CON GROQ ───────────────────────────────────────────────
+
 def generar_con_groq(respuestas: dict, nombre: str, fotos: int) -> str:
-    """Llama a la API gratuita de Groq para generar el borrador."""
     api_key = os.getenv("GROQ_API_KEY")
     if not api_key:
         return "❌ Falta la variable GROQ_API_KEY en Railway."
@@ -80,7 +85,6 @@ def generar_con_groq(respuestas: dict, nombre: str, fotos: int) -> str:
         f"{v}: {respuestas.get(k, '(no especificado)')}\n"
         for k, v in etiquetas.items()
     )
-
     user_msg = (
         f"DATOS DEL REPORTE:\n{datos}\n"
         f"Periodista: {nombre}\n"
@@ -106,25 +110,80 @@ def generar_con_groq(respuestas: dict, nombre: str, fotos: int) -> str:
             },
             timeout=60
         )
-
         data = response.json()
-
         if "choices" in data and data["choices"]:
             return data["choices"][0]["message"]["content"]
         elif "error" in data:
-            logger.error(f"Error Groq: {data['error']}")
             return f"❌ Error de API: {data['error'].get('message', 'Error desconocido')}"
         else:
             return "❌ No se pudo generar el borrador. Intentá de nuevo con /start."
-
     except requests.Timeout:
         return "❌ La generación tardó demasiado. Intentá de nuevo con /start."
     except Exception as e:
-        logger.error(f"Error llamada Groq: {e}")
+        logger.error(f"Error Groq: {e}")
         return "❌ Error al conectar con la IA. Intentá de nuevo con /start."
 
 
-# ── HANDLERS ─────────────────────────────────────────────────────────
+# ── PUBLICAR EN GOOGLE DRIVE ──────────────────────────────────────────
+
+def publicar_en_drive(borrador: str, nombre: str, titulo: str) -> str:
+    """Crea un documento de texto en Google Drive y retorna el link."""
+    credentials_json = os.getenv("GOOGLE_CREDENTIALS")
+    folder_id = os.getenv("GDRIVE_FOLDER_ID")
+
+    if not credentials_json or not folder_id:
+        logger.warning("Google Drive no configurado — saltando publicación.")
+        return None
+
+    try:
+        from google.oauth2 import service_account
+        from googleapiclient.discovery import build
+        from googleapiclient.http import MediaInMemoryUpload
+
+        # Cargar credenciales desde la variable de entorno
+        creds_dict = json.loads(credentials_json)
+        creds = service_account.Credentials.from_service_account_info(
+            creds_dict,
+            scopes=["https://www.googleapis.com/auth/drive"]
+        )
+        service = build("drive", "v3", credentials=creds)
+
+        # Nombre del documento
+        nombre_doc = f"[BORRADOR] {titulo} — {nombre}"
+
+        # Crear el documento en Drive
+        file_metadata = {
+            "name": nombre_doc,
+            "mimeType": "application/vnd.google-apps.document",
+            "parents": [folder_id]
+        }
+        media = MediaInMemoryUpload(
+            borrador.encode("utf-8"),
+            mimetype="text/plain"
+        )
+        archivo = service.files().create(
+            body=file_metadata,
+            media_body=media,
+            fields="id,webViewLink"
+        ).execute()
+
+        return archivo.get("webViewLink")
+
+    except Exception as e:
+        logger.error(f"Error Google Drive: {e}")
+        return None
+
+
+def extraer_titulo(borrador: str) -> str:
+    """Extrae el título del borrador generado."""
+    for linea in borrador.split("\n"):
+        linea = linea.strip()
+        if linea.startswith("TÍTULO:") or linea.startswith("**TÍTULO"):
+            return linea.replace("TÍTULO:", "").replace("**", "").strip()
+    return "Borrador sin título"
+
+
+# ── HANDLERS DE TELEGRAM ──────────────────────────────────────────────
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.clear()
@@ -230,21 +289,40 @@ async def cmd_generar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         parse_mode="Markdown"
     )
 
-    borrador = generar_con_groq(
-        context.user_data.get("respuestas", {}),
-        context.user_data.get("nombre", "colaborador/a"),
-        fotos
-    )
+    nombre = context.user_data.get("nombre", "colaborador/a")
+    respuestas = context.user_data.get("respuestas", {})
 
+    # Generar borrador con Groq
+    borrador = generar_con_groq(respuestas, nombre, fotos)
+
+    # Enviar borrador en Telegram
     for i in range(0, len(borrador), 4000):
         await update.message.reply_text(borrador[i:i + 4000])
 
+    # Publicar en Google Drive
     await update.message.reply_text(
-        "✅ *Borrador generado.*\n\n"
-        "El equipo editorial lo revisará antes de publicar.\n\n"
-        "_Escribí /start para un nuevo reporte._",
+        "📂 _Enviando a Google Drive..._",
         parse_mode="Markdown"
     )
+
+    titulo = extraer_titulo(borrador)
+    link_drive = publicar_en_drive(borrador, nombre, titulo)
+
+    if link_drive:
+        await update.message.reply_text(
+            f"✅ *Borrador en Google Drive:*\n\n"
+            f"📄 [{titulo}]({link_drive})\n\n"
+            f"_El equipo editorial lo revisará antes de publicar._",
+            parse_mode="Markdown"
+        )
+    else:
+        await update.message.reply_text(
+            "✅ *Borrador generado.*\n\n"
+            "_El equipo editorial lo revisará antes de publicar._\n\n"
+            "_Escribí /start para un nuevo reporte._",
+            parse_mode="Markdown"
+        )
+
     return ConversationHandler.END
 
 
@@ -305,7 +383,7 @@ def main():
     app.add_handler(conv)
     app.add_handler(CommandHandler("ayuda", ayuda))
 
-    logger.info("Quilmes Bot corriendo con Groq...")
+    logger.info("Quilmes Bot corriendo con Groq + Google Drive...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
