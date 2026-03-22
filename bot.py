@@ -1,19 +1,21 @@
 """
-QUILMES BOT — bot.py (versión con Groq + Google Drive)
+QUILMES BOT — bot.py (versión con Groq + Email)
 Bot de reporte periodístico para Refugio Latinoamericano
 
 Variables de entorno necesarias:
-  TELEGRAM_BOT_TOKEN    → token de @BotFather
-  GROQ_API_KEY          → API key gratuita de console.groq.com
-  GOOGLE_CREDENTIALS    → contenido del archivo JSON de la cuenta de servicio
-  GDRIVE_FOLDER_ID      → ID de la carpeta de Google Drive
+  TELEGRAM_BOT_TOKEN  → token de @BotFather
+  GROQ_API_KEY        → API key gratuita de console.groq.com
+  GMAIL_USER          → email de Gmail de Refugio
+  GMAIL_PASSWORD      → contraseña de aplicación de 16 caracteres
+  EDITORIAL_EMAIL     → email del equipo editorial (opcional, usa GMAIL_USER si no está)
 """
 
 import os
-import json
 import logging
+import smtplib
 import requests
-import tempfile
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
@@ -124,69 +126,51 @@ def generar_con_groq(respuestas: dict, nombre: str, fotos: int) -> str:
         return "❌ Error al conectar con la IA. Intentá de nuevo con /start."
 
 
-# ── PUBLICAR EN GOOGLE DRIVE ──────────────────────────────────────────
+# ── ENVÍO POR EMAIL ───────────────────────────────────────────────────
 
-def publicar_en_drive(borrador: str, nombre: str, titulo: str) -> str:
-    """Crea un documento de texto en Google Drive y retorna el link."""
-    credentials_json = os.getenv("GOOGLE_CREDENTIALS")
-    folder_id = os.getenv("GDRIVE_FOLDER_ID")
+def enviar_por_email(borrador: str, nombre: str, titulo: str) -> bool:
+    """Envía el borrador por email al equipo editorial."""
+    gmail_user = os.getenv("GMAIL_USER")
+    gmail_password = os.getenv("GMAIL_PASSWORD")
+    editorial_email = os.getenv("EDITORIAL_EMAIL", gmail_user)
 
-    if not credentials_json or not folder_id:
-        logger.warning("Google Drive no configurado — saltando publicación.")
-        return None
+    if not gmail_user or not gmail_password:
+        logger.warning("Gmail no configurado — saltando envío de email.")
+        return False
 
     try:
-        from google.oauth2 import service_account
-        from googleapiclient.discovery import build
-        from googleapiclient.http import MediaInMemoryUpload
+        msg = MIMEMultipart()
+        msg["From"] = gmail_user
+        msg["To"] = editorial_email
+        msg["Subject"] = f"[BORRADOR] {titulo} — Reporte de {nombre}"
 
-        # Cargar credenciales desde archivo o variable de entorno
-        creds = None
-        if os.path.exists("credentials.json"):
-            creds = service_account.Credentials.from_service_account_file(
-                "credentials.json",
-                scopes=["https://www.googleapis.com/auth/drive"]
-            )
-        elif credentials_json:
-            credentials_json = credentials_json.replace('\\n', '\n')
-            creds_dict = json.loads(credentials_json)
-            creds = service_account.Credentials.from_service_account_info(
-                creds_dict,
-                scopes=["https://www.googleapis.com/auth/drive"]
-            )
-        if not creds:
-            logger.error("No se encontraron credenciales de Google")
-            return None
-        service = build("drive", "v3", credentials=creds)
+        cuerpo = f"""BORRADOR PERIODÍSTICO — REFUGIO LATINOAMERICANO
+Pendiente de revisión editorial antes de publicar.
 
-        # Nombre del documento
-        nombre_doc = f"[BORRADOR] {titulo} — {nombre}"
+Periodista/colaborador: {nombre}
+─────────────────────────────────────────────────
 
-        # Crear archivo de texto plano en la carpeta compartida
-        # Usamos text/plain para evitar problemas de cuota de Google Docs
-        file_metadata = {
-            "name": nombre_doc + ".txt",
-            "parents": [folder_id]
-        }
-        media = MediaInMemoryUpload(
-            borrador.encode("utf-8"),
-            mimetype="text/plain"
-        )
-        archivo = service.files().create(
-            body=file_metadata,
-            media_body=media,
-            fields="id,webViewLink"
-        ).execute()
+{borrador}
 
-        return archivo.get("webViewLink")
+─────────────────────────────────────────────────
+Este borrador fue generado por Quilmes Bot.
+No publicar sin revisión editorial.
+"""
+        msg.attach(MIMEText(cuerpo, "plain", "utf-8"))
+
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+            server.login(gmail_user, gmail_password)
+            server.sendmail(gmail_user, editorial_email, msg.as_string())
+
+        logger.info(f"Email enviado a {editorial_email}")
+        return True
 
     except Exception as e:
-        logger.error(f"Error Google Drive: {e}")
-        return None
+        logger.error(f"Error email: {e}")
+        return False
 
 
 def extraer_titulo(borrador: str) -> str:
-    """Extrae el título del borrador generado."""
     for linea in borrador.split("\n"):
         linea = linea.strip()
         if linea.startswith("TÍTULO:") or linea.startswith("**TÍTULO"):
@@ -194,7 +178,7 @@ def extraer_titulo(borrador: str) -> str:
     return "Borrador sin título"
 
 
-# ── HANDLERS DE TELEGRAM ──────────────────────────────────────────────
+# ── HANDLERS ─────────────────────────────────────────────────────────
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.clear()
@@ -303,27 +287,29 @@ async def cmd_generar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     nombre = context.user_data.get("nombre", "colaborador/a")
     respuestas = context.user_data.get("respuestas", {})
 
-    # Generar borrador con Groq
+    # Generar borrador
     borrador = generar_con_groq(respuestas, nombre, fotos)
+    titulo = extraer_titulo(borrador)
 
-    # Enviar borrador en Telegram
+    # Enviar en Telegram
     for i in range(0, len(borrador), 4000):
         await update.message.reply_text(borrador[i:i + 4000])
 
-    # Publicar en Google Drive
+    # Enviar por email
     await update.message.reply_text(
-        "📂 _Enviando a Google Drive..._",
+        "📧 _Enviando al equipo editorial..._",
         parse_mode="Markdown"
     )
 
-    titulo = extraer_titulo(borrador)
-    link_drive = publicar_en_drive(borrador, nombre, titulo)
+    enviado = enviar_por_email(borrador, nombre, titulo)
 
-    if link_drive:
+    if enviado:
+        editorial_email = os.getenv("EDITORIAL_EMAIL", os.getenv("GMAIL_USER", "el equipo"))
         await update.message.reply_text(
-            f"✅ *Borrador en Google Drive:*\n\n"
-            f"📄 [{titulo}]({link_drive})\n\n"
-            f"_El equipo editorial lo revisará antes de publicar._",
+            f"✅ *Borrador enviado por email.*\n\n"
+            f"📬 Llegó a: {editorial_email}\n\n"
+            f"_El equipo editorial lo revisará antes de publicar._\n\n"
+            f"_Escribí /start para un nuevo reporte._",
             parse_mode="Markdown"
         )
     else:
@@ -394,7 +380,7 @@ def main():
     app.add_handler(conv)
     app.add_handler(CommandHandler("ayuda", ayuda))
 
-    logger.info("Quilmes Bot corriendo con Groq + Google Drive...")
+    logger.info("Quilmes Bot corriendo con Groq + Email...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
