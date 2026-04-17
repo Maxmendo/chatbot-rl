@@ -1,6 +1,6 @@
 """
-QUILMES BOT — bot.py (versión con autenticación por contraseña + nombre)
-Groq + Resend + Password + Identificación del corresponsal
+QUILMES BOT — bot.py (versión con fotos adjuntas en email)
+Groq + Resend + Password + Identificación + Fotos adjuntas
 
 Variables de entorno necesarias:
   TELEGRAM_BOT_TOKEN  → token de @BotFather
@@ -11,6 +11,7 @@ Variables de entorno necesarias:
 """
 
 import os
+import base64
 import logging
 import requests
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
@@ -82,31 +83,67 @@ def generar_con_groq(respuestas: dict, nombre: str, fotos: int) -> str:
         return "❌ Error al conectar con la IA."
 
 
-def enviar_con_resend(borrador: str, nombre: str, titulo: str) -> bool:
+async def descargar_fotos(file_ids: list, bot) -> list:
+    """Descarga las fotos de Telegram y las retorna como bytes."""
+    fotos_bytes = []
+    for i, file_id in enumerate(file_ids):
+        try:
+            file = await bot.get_file(file_id)
+            foto_bytes = await file.download_as_bytearray()
+            fotos_bytes.append({
+                "nombre": f"foto_{i+1}.jpg",
+                "datos": bytes(foto_bytes)
+            })
+            logger.info(f"Foto {i+1} descargada: {len(foto_bytes)} bytes")
+        except Exception as e:
+            logger.error(f"Error descargando foto {i+1}: {e}")
+    return fotos_bytes
+
+
+def enviar_con_resend(borrador: str, nombre: str, titulo: str, fotos_bytes: list = None) -> bool:
     api_key = os.getenv("RESEND_API_KEY")
     editorial_email = os.getenv("EDITORIAL_EMAIL")
     if not api_key or not editorial_email:
         logger.warning("Resend no configurado.")
         return False
+
     cuerpo = (
         f"BORRADOR PERIODÍSTICO — REFUGIO LATINOAMERICANO\n"
         f"Pendiente de revisión editorial antes de publicar.\n\n"
         f"Corresponsal: {nombre}\n"
+        f"Fotos adjuntas: {len(fotos_bytes) if fotos_bytes else 0}\n"
         f"{'─'*50}\n\n"
         f"{borrador}\n\n"
         f"{'─'*50}\n"
         f"Generado por Quilmes Bot. No publicar sin revisión editorial."
     )
+
+    payload = {
+        "from": "Quilmes Bot <onboarding@resend.dev>",
+        "to": [editorial_email],
+        "subject": f"[BORRADOR] {titulo} — {nombre}",
+        "text": cuerpo
+    }
+
+    # Adjuntar fotos si las hay
+    if fotos_bytes:
+        adjuntos = []
+        for foto in fotos_bytes:
+            adjuntos.append({
+                "filename": foto["nombre"],
+                "content": base64.b64encode(foto["datos"]).decode("utf-8"),
+                "type": "image/jpeg"
+            })
+        payload["attachments"] = adjuntos
+        logger.info(f"Adjuntando {len(adjuntos)} fotos al email")
+
     try:
         r = requests.post("https://api.resend.com/emails",
             headers={"Authorization":f"Bearer {api_key}","Content-Type":"application/json"},
-            json={"from":"Quilmes Bot <onboarding@resend.dev>",
-                  "to":[editorial_email],
-                  "subject":f"[BORRADOR] {titulo} — {nombre}",
-                  "text":cuerpo},
-            timeout=30)
+            json=payload,
+            timeout=60)
         if r.status_code in [200,201]:
-            logger.info(f"Email enviado a {editorial_email}")
+            logger.info(f"Email enviado a {editorial_email} con {len(fotos_bytes or [])} fotos")
             return True
         logger.error(f"Error Resend {r.status_code}: {r.text}")
         return False
@@ -138,20 +175,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 async def handle_autenticacion(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     password_correcta = os.getenv("BOT_PASSWORD", "")
     ingresada = update.message.text.strip()
-
     if ingresada == password_correcta:
         await update.message.reply_text(
             "✅ *Acceso autorizado.*\n\n"
-            "Antes de comenzar, ingresá tu *nombre y apellido completo* "
-            "para identificar tu reporte:",
+            "Antes de comenzar, ingresá tu *nombre y apellido completo*:",
             parse_mode="Markdown"
         )
         return IDENTIFICACION
     else:
         await update.message.reply_text(
             "❌ *Contraseña incorrecta.*\n\n"
-            "Si sos corresponsal de Refugio Latinoamericano y no tenés acceso, "
-            "contactá al equipo editorial.\n\n"
+            "Si sos corresponsal de Refugio Latinoamericano, contactá al equipo editorial.\n\n"
             "Para intentar de nuevo escribí /start",
             parse_mode="Markdown"
         )
@@ -160,21 +194,13 @@ async def handle_autenticacion(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def handle_identificacion(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     nombre_completo = update.message.text.strip()
-
     if len(nombre_completo.split()) < 2:
         await update.message.reply_text(
-            "Por favor ingresá tu *nombre y apellido completo*. "
-            "Ejemplo: _María González_",
+            "Por favor ingresá tu *nombre y apellido completo*. Ejemplo: _María González_",
             parse_mode="Markdown"
         )
         return IDENTIFICACION
-
-    context.user_data.update({
-        "nombre": nombre_completo,
-        "respuestas": {},
-        "fotos": 0
-    })
-
+    context.user_data.update({"nombre": nombre_completo, "respuestas": {}, "fotos": 0, "foto_ids": []})
     await update.message.reply_text(
         f"Perfecto, *{nombre_completo}*. Tu nombre quedará registrado en el reporte.\n\n"
         "Voy a hacerte *7 preguntas* para estructurar tu nota. "
@@ -224,13 +250,18 @@ async def avanzar(update, context, estado_actual) -> int:
         await update.message.reply_text(
             "✅ *¡Las 7 preguntas completas!*\n\n"
             "📸 Enviame *al menos una foto* del hecho.\n"
-            "Cuando termines escribí */generar*",
+            "Podés enviar varias. Cuando termines escribí */generar*",
             parse_mode="Markdown")
         return ESPERANDO_FOTOS
 
 
 async def handle_foto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    context.user_data["fotos"] = context.user_data.get("fotos", 0) + 1
+    # Guardar el file_id de la foto de mayor resolución
+    foto = update.message.photo[-1]
+    if "foto_ids" not in context.user_data:
+        context.user_data["foto_ids"] = []
+    context.user_data["foto_ids"].append(foto.file_id)
+    context.user_data["fotos"] = len(context.user_data["foto_ids"])
     n = context.user_data["fotos"]
     await update.message.reply_text(
         f"📷 Foto {n} recibida ✓\n_Más fotos o /generar para continuar._",
@@ -255,13 +286,22 @@ async def cmd_generar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     for i in range(0, len(borrador), 4000):
         await update.message.reply_text(borrador[i:i+4000])
 
-    await update.message.reply_text("📧 _Enviando al equipo editorial..._", parse_mode="Markdown")
-    enviado = enviar_con_resend(borrador, nombre, titulo)
+    await update.message.reply_text(
+        f"📧 _Descargando {fotos} foto(s) y enviando al equipo editorial..._",
+        parse_mode="Markdown")
+
+    # Descargar fotos de Telegram
+    foto_ids = context.user_data.get("foto_ids", [])
+    fotos_bytes = await descargar_fotos(foto_ids, context.bot)
+
+    # Enviar email con fotos adjuntas
+    enviado = enviar_con_resend(borrador, nombre, titulo, fotos_bytes)
 
     if enviado:
         await update.message.reply_text(
             f"✅ *Borrador enviado al equipo editorial.*\n\n"
-            f"_Registrado a nombre de: {nombre}_\n\n"
+            f"📎 Fotos adjuntas: {len(fotos_bytes)}\n"
+            f"👤 Corresponsal: {nombre}\n\n"
             f"_El equipo lo revisará antes de publicar._\n\n"
             f"_Escribí /start para un nuevo reporte._",
             parse_mode="Markdown")
@@ -320,7 +360,7 @@ def main():
 
     app.add_handler(conv)
     app.add_handler(CommandHandler("ayuda", ayuda))
-    logger.info("Quilmes Bot corriendo con autenticación + identificación...")
+    logger.info("Quilmes Bot corriendo con fotos adjuntas en email...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
