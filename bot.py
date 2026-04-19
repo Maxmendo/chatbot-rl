@@ -127,25 +127,49 @@ async def descargar_fotos(file_ids: list, bot) -> list:
     return fotos_bytes
 
 
-def enviar_con_resend(borrador: str, nombre: str, titulo: str, fotos_bytes: list = None) -> bool:
+async def descargar_video(video_id: str, bot) -> dict:
+    """Descarga el video de Telegram."""
+    try:
+        file = await bot.get_file(video_id)
+        video_bytes = await file.download_as_bytearray()
+        return {"nombre": "video.mp4", "datos": bytes(video_bytes)}
+    except Exception as e:
+        logger.error(f"Error descargando video: {e}")
+        return None
+
+
+def enviar_con_resend(borrador: str, nombre: str, titulo: str, fotos_bytes: list = None, video_bytes: dict = None) -> bool:
     api_key = os.getenv("RESEND_API_KEY")
     editorial_email = os.getenv("EDITORIAL_EMAIL")
     if not api_key or not editorial_email:
         return False
+    n_fotos = len(fotos_bytes) if fotos_bytes else 0
+    tiene_video = "Sí" if video_bytes else "No"
     cuerpo = (f"BORRADOR PERIODÍSTICO — REFUGIO LATINOAMERICANO\n"
               f"Pendiente de revisión editorial.\n\nCorresponsal: {nombre}\n"
-              f"Fotos: {len(fotos_bytes) if fotos_bytes else 0}\n{'─'*50}\n\n{borrador}\n\n{'─'*50}\n"
-              f"Generado por Quilmes Bot.")
-    payload = {"from":"Quilmes Bot <onboarding@resend.dev>","to":[editorial_email],
+              f"Fotos adjuntas: {n_fotos}\n"
+              f"Video adjunto: {tiene_video}\n"
+              f"{'─'*50}\n\n{borrador}\n\n{'─'*50}\n"
+              f"Generado por el Chatbot de Refugio Latinoamericano.")
+    payload = {"from":"Chatbot Refugio Latinoamericano <onboarding@resend.dev>","to":[editorial_email],
                "subject":f"[BORRADOR] {titulo} — {nombre}","text":cuerpo}
+    attachments = []
     if fotos_bytes:
-        payload["attachments"] = [
+        attachments.extend([
             {"filename":f["nombre"],"content":base64.b64encode(f["datos"]).decode(),"type":"image/jpeg"}
-            for f in fotos_bytes]
+            for f in fotos_bytes])
+    if video_bytes:
+        attachments.append({
+            "filename": video_bytes["nombre"],
+            "content": base64.b64encode(video_bytes["datos"]).decode(),
+            "type": "video/mp4"
+        })
+    if attachments:
+        payload["attachments"] = attachments
     try:
         r = requests.post("https://api.resend.com/emails",
             headers={"Authorization":f"Bearer {api_key}","Content-Type":"application/json"},
-            json=payload, timeout=60)
+            json=payload, timeout=90)
         return r.status_code in [200,201]
     except Exception as e:
         logger.error(f"Error Resend: {e}")
@@ -177,7 +201,7 @@ def construir_teclado_pregunta(estado: int):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.clear()
     await update.message.reply_text(
-        "Hola. Soy *Quilmes Bot* de *Refugio Latinoamericano*.\n\n"
+        "Hola. Soy el *Chatbot - Refugio Latinoamericano*.\n\n"
         "🔐 Ingresá la contraseña de acceso:",
         parse_mode="Markdown", reply_markup=ReplyKeyboardRemove())
     return AUTENTICACION
@@ -289,7 +313,11 @@ async def avanzar(update, context, estado_actual) -> int:
     else:
         context.user_data["estado_pregunta"] = ESPERANDO_FOTOS
         await update.message.reply_text(
-            "✅ *¡Las 7 preguntas completas!*\n\n📸 Enviame *al menos una foto*.\nCuando termines escribí */generar*",
+            "✅ *¡Las 7 preguntas completas!*\n\n"
+            "📸 Enviame *al menos 2 fotos* del hecho.\n"
+            "🎥 Opcionalmente, podés adjuntar *un video de hasta 30 segundos*.\n\n"
+            "⚠️ _Videos más largos no serán procesados._\n\n"
+            "Cuando termines, escribí */generar*",
             parse_mode="Markdown")
         return ESPERANDO_FOTOS
 
@@ -299,17 +327,52 @@ async def handle_foto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     if "foto_ids" not in context.user_data:
         context.user_data["foto_ids"] = []
     context.user_data["foto_ids"].append(foto.file_id)
-    context.user_data["fotos"] = len(context.user_data["foto_ids"])
-    await update.message.reply_text(
-        f"📷 Foto {context.user_data['fotos']} recibida ✓\n_Más fotos o /generar_",
-        parse_mode="Markdown")
+    n = len(context.user_data["foto_ids"])
+    context.user_data["fotos"] = n
+
+    if n < 2:
+        msg = f"📷 Foto {n} recibida ✓\n_Falta {2-n} foto más para continuar._"
+    elif n == 2:
+        msg = f"📷 Foto {n} recibida ✓\n_Mínimo cumplido. Podés enviar más fotos, un video, o /generar_"
+    else:
+        msg = f"📷 Foto {n} recibida ✓\n_Más fotos, un video, o /generar_"
+
+    await update.message.reply_text(msg, parse_mode="Markdown")
+    return ESPERANDO_FOTOS
+
+
+async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Recibe video de hasta 30 segundos."""
+    video = update.message.video
+    duracion = video.duration if video.duration else 0
+
+    if duracion > 30:
+        await update.message.reply_text(
+            f"⚠️ *Video rechazado* — dura {duracion} segundos.\n\n"
+            "Solo aceptamos videos de hasta 30 segundos. Enviá uno más corto.",
+            parse_mode="Markdown")
+        return ESPERANDO_FOTOS
+
+    # Guardar file_id del video
+    context.user_data["video_id"] = video.file_id
+    context.user_data["video_duracion"] = duracion
+
+    fotos = context.user_data.get("fotos", 0)
+    if fotos < 2:
+        msg = f"🎥 Video recibido ✓ ({duracion}s)\n_Todavía necesitás {2-fotos} foto(s) más antes de /generar_"
+    else:
+        msg = f"🎥 Video recibido ✓ ({duracion}s)\n_Listo para generar con /generar_"
+
+    await update.message.reply_text(msg, parse_mode="Markdown")
     return ESPERANDO_FOTOS
 
 
 async def cmd_generar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     fotos = context.user_data.get("fotos", 0)
-    if fotos == 0:
-        await update.message.reply_text("⚠️ Enviá al menos una foto.")
+    if fotos < 2:
+        await update.message.reply_text(
+            f"⚠️ Necesitás *al menos 2 fotos* antes de generar.\n_Enviaste {fotos} hasta ahora._",
+            parse_mode="Markdown")
         return ESPERANDO_FOTOS
     await update.message.reply_text("⏳ *Generando borrador...*", parse_mode="Markdown")
     nombre = context.user_data.get("nombre", "corresponsal")
@@ -319,10 +382,23 @@ async def cmd_generar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         await update.message.reply_text(borrador[i:i+4000])
     await update.message.reply_text("📧 _Enviando al equipo editorial..._", parse_mode="Markdown")
     fotos_bytes = await descargar_fotos(context.user_data.get("foto_ids", []), context.bot)
-    enviado = enviar_con_resend(borrador, nombre, titulo, fotos_bytes)
+
+    # Descargar video si existe
+    video_bytes = None
+    video_id = context.user_data.get("video_id")
+    if video_id:
+        await update.message.reply_text("🎥 _Descargando video..._", parse_mode="Markdown")
+        video_bytes = await descargar_video(video_id, context.bot)
+
+    enviado = enviar_con_resend(borrador, nombre, titulo, fotos_bytes, video_bytes)
+
     if enviado:
+        info = f"📎 Fotos: {len(fotos_bytes)}"
+        if video_bytes:
+            dur = context.user_data.get("video_duracion", 0)
+            info += f"\n🎥 Video: {dur}s"
         await update.message.reply_text(
-            f"✅ *Borrador enviado.*\n👤 Corresponsal: {nombre}\n📎 Fotos: {len(fotos_bytes)}\n\n_/start para nuevo reporte_",
+            f"✅ *Borrador enviado.*\n👤 Corresponsal: {nombre}\n{info}\n\n_/start para nuevo reporte_",
             parse_mode="Markdown")
     else:
         await update.message.reply_text("✅ *Borrador generado.*\n_/start para nuevo reporte_", parse_mode="Markdown")
@@ -359,13 +435,14 @@ def main():
             PREGUNTA_PARA_QUE:[texto_h, audio_h, webapp_h],
             ESPERANDO_FOTOS:  [
                 MessageHandler(filters.PHOTO, handle_foto),
+                MessageHandler(filters.VIDEO, handle_video),
                 CommandHandler("generar", cmd_generar)
             ],
         },
         fallbacks=[CommandHandler("cancelar", cancelar), CommandHandler("generar", cmd_generar)],
     )
     app.add_handler(conv)
-    logger.info("Quilmes Bot con Mini App corriendo...")
+    logger.info("Chatbot - Refugio Latinoamericano con Mini App corriendo...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
