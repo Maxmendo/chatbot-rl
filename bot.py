@@ -856,6 +856,26 @@ def main():
         fallbacks=[CommandHandler("cancelar", cancelar), CommandHandler("generar", cmd_generar)],
     )
     app.add_handler(conv)
+
+    # Servidor web mínimo para que Render detecte el servicio activo
+    import threading
+    from http.server import HTTPServer, BaseHTTPRequestHandler
+
+    class HealthHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"OK")
+        def log_message(self, format, *args):
+            pass  # silencia los logs del servidor
+
+    port = int(os.getenv("PORT", 8080))
+    server = HTTPServer(("0.0.0.0", port), HealthHandler)
+    thread = threading.Thread(target=server.serve_forever)
+    thread.daemon = True
+    thread.start()
+    logger.info(f"Health server corriendo en puerto {port}")
+
     logger.info("Chatbot Refugio Latinoamericano v3 corriendo — motor de repreguntas activo...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
