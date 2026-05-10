@@ -1,6 +1,6 @@
 """
-CHATBOT REFUGIO LATINOAMERICANO — bot.py v5
-Incorpora: selección de género periodístico + flujos diferenciados + motor de repreguntas
+CHATBOT REFUGIO LATINOAMERICANO — bot.py v6
+Incorpora: resumen editable antes de generar + /reiniciar
 
 Variables de entorno:
   TELEGRAM_BOT_TOKEN  → token del bot de Telegram
@@ -27,7 +27,8 @@ logger = logging.getLogger(__name__)
 
 # Estados del ConversationHandler
 (AUTENTICACION, IDENTIFICACION, SELECCION_GENERO, INICIO_FLUJO,
- RESPONDIENDO_PREGUNTA, ESPERANDO_FOTOS, CIERRE_ETICO) = range(7)
+ RESPONDIENDO_PREGUNTA, REVISION_RESUMEN, EDITANDO_RESPUESTA,
+ ESPERANDO_FOTOS, CIERRE_ETICO) = range(9)
 
 # ═══════════════════════════════════════════════════════════════
 # GÉNEROS PERIODÍSTICOS
@@ -91,38 +92,14 @@ FLUJO_HISTORIA_VIDA = {
         "Primero, contame brevemente *nombre completo, edad, ocupación y país de origen* de la persona que vas a entrevistar."
     ),
     "preguntas": [
-        {
-            "clave": "identificacion",
-            "texto": "👤 *Datos de identificación*\n\nNombre completo, edad, ocupación y país de origen de la persona entrevistada.",
-        },
-        {
-            "clave": "origen",
-            "texto": "🌍 *1. Origen*\n\n¿De dónde viene? ¿Cómo era su vida antes de migrar? ¿En qué año llegó al país y cuántos años tenía cuando dejó su lugar de origen? ¿Vino sola, o con familia, pareja y/o amigos?",
-        },
-        {
-            "clave": "motivos",
-            "texto": "🔄 *2. Motivos de movilidad*\n\n¿Qué razones le llevaron a emigrar? ¿Qué significó ese momento? ¿Cómo planificó su partida?",
-        },
-        {
-            "clave": "transito",
-            "texto": "🛤️ *3. Tránsito*\n\n¿Cómo fue el viaje? ¿Qué experiencias, obstáculos o emociones marcaron ese trayecto?",
-        },
-        {
-            "clave": "llegada",
-            "texto": "📍 *4. Llegada*\n\n¿Cuáles fueron sus primeras impresiones al llegar? ¿Qué situaciones o desafíos recuerda de esos primeros días? ¿Contaba con contactos previos con otros miembros de su comunidad?",
-        },
-        {
-            "clave": "laboral",
-            "texto": "💼 *5. Inserción laboral*\n\n¿Cómo fue su inserción laboral en el país? ¿Actualmente está trabajando? ¿Trabaja por su cuenta o en relación de dependencia?",
-        },
-        {
-            "clave": "presente",
-            "texto": "🏡 *6. Presente*\n\n¿Cómo es su vida hoy? ¿A qué se dedica, qué vínculos construyó? ¿Se relaciona con personas de su comunidad acá? ¿Qué cosas echa de menos de su lugar de origen? ¿Cuáles son sus proyectos aquí?",
-        },
-        {
-            "clave": "horizonte",
-            "texto": "🔮 *7. Horizonte*\n\n¿Cómo vive hoy su identidad y sentido de pertenencia? ¿Piensa en regresar a su tierra de origen o proyecta su futuro acá?",
-        },
+        {"clave": "identificacion", "texto": "👤 *Datos de identificación*\n\nNombre completo, edad, ocupación y país de origen de la persona entrevistada."},
+        {"clave": "origen", "texto": "🌍 *1. Origen*\n\n¿De dónde viene? ¿Cómo era su vida antes de migrar? ¿En qué año llegó al país y cuántos años tenía cuando dejó su lugar de origen? ¿Vino sola, o con familia, pareja y/o amigos?"},
+        {"clave": "motivos", "texto": "🔄 *2. Motivos de movilidad*\n\n¿Qué razones le llevaron a emigrar? ¿Qué significó ese momento? ¿Cómo planificó su partida?"},
+        {"clave": "transito", "texto": "🛤️ *3. Tránsito*\n\n¿Cómo fue el viaje? ¿Qué experiencias, obstáculos o emociones marcaron ese trayecto?"},
+        {"clave": "llegada", "texto": "📍 *4. Llegada*\n\n¿Cuáles fueron sus primeras impresiones al llegar? ¿Qué situaciones o desafíos recuerda de esos primeros días? ¿Contaba con contactos previos con otros miembros de su comunidad?"},
+        {"clave": "laboral", "texto": "💼 *5. Inserción laboral*\n\n¿Cómo fue su inserción laboral en el país? ¿Actualmente está trabajando? ¿Trabaja por su cuenta o en relación de dependencia?"},
+        {"clave": "presente", "texto": "🏡 *6. Presente*\n\n¿Cómo es su vida hoy? ¿A qué se dedica, qué vínculos construyó? ¿Se relaciona con personas de su comunidad acá? ¿Qué cosas echa de menos de su lugar de origen? ¿Cuáles son sus proyectos aquí?"},
+        {"clave": "horizonte", "texto": "🔮 *7. Horizonte*\n\n¿Cómo vive hoy su identidad y sentido de pertenencia? ¿Piensa en regresar a su tierra de origen o proyecta su futuro acá?"},
     ],
 }
 
@@ -135,46 +112,16 @@ FLUJO_DENUNCIA = {
         "Contame en tus propias palabras qué está ocurriendo."
     ),
     "preguntas": [
-        {
-            "clave": "naturaleza",
-            "texto": "🔍 *1. Naturaleza del problema*\n\n¿Qué tipo de situación se vive? (vulneración de derechos, discriminación, obstáculos para acceder a servicios, abuso institucional, violencia, trámite irregular). ¿Es un hecho puntual o una situación sostenida? ¿Afecta a una o muchas personas en situación similar?",
-        },
-        {
-            "clave": "personas_afectadas",
-            "texto": "👥 *2. Personas afectadas*\n\n¿Quiénes son las personas afectadas? ¿Se trata de una persona, familia, comunidad? ¿De qué país o comunidad provienen? ¿Qué las llevó a dejar su lugar de origen? ¿Hace cuánto viven en el país donde ocurre la situación? ¿Cuál es su situación migratoria actual (con residencia, en trámite, solicitantes de refugio, situación irregular)? ¿Hay dimensiones específicas (niñez, personas mayores, embarazadas, mujeres víctimas de violencia de género, personas LGBTIQ+, personas con discapacidad)?",
-        },
-        {
-            "clave": "identificacion_afectadas",
-            "texto": "🔐 *3. Cómo quieren ser identificadas*\n\n¿Cómo les gustaría a las personas afectadas ser identificadas en la nota? ¿Con sus nombres completos, iniciales o seudónimo? _Si están en situación de solicitud de refugio o irregularidad, siempre es mejor proteger su identidad._",
-        },
-        {
-            "clave": "responsables",
-            "texto": "🏛️ *4. Responsables*\n\n¿Quiénes son los responsables? (autoridad estatal, institución pública, empresa, particular). ¿Nombre, cargo, dependencia concreta? ¿Existe un marco normativo que se está incumpliendo?",
-        },
-        {
-            "clave": "lugar_momento",
-            "texto": "📍 *5. Lugar y momento*\n\n¿Dónde ocurre? (país, provincia, ciudad, barrio, dirección). ¿Cuándo? ¿Hecho puntual o sostenido en el tiempo?",
-        },
-        {
-            "clave": "gestiones",
-            "texto": "📋 *6. Gestiones previas*\n\n¿Las personas afectadas ya hicieron denuncia formal? ¿Dónde? ¿Número de expediente o acta? ¿Contactaron algún organismo, ONG, consulado, defensoría? ¿Qué respuesta recibieron?",
-        },
-        {
-            "clave": "testimonios",
-            "texto": "📢 *7. Testimonios y pruebas*\n\n¿Hay otras personas que hayan vivido o visto lo mismo y puedan testimoniar? ¿Documentos, capturas, audios, comunicaciones oficiales, pruebas materiales? ¿Alguna fuente experta (organización, abogada, académica, referente) que pueda aportar contexto?",
-        },
-        {
-            "clave": "impacto",
-            "texto": "💥 *8. Impacto personal y comunitario*\n\n¿Cómo afecta la vida cotidiana de las personas? _(sin enfocar solo en el sufrimiento — también en cómo resisten, se organizan, se defienden)_ ¿Qué consecuencias tiene en la comunidad más amplia? ¿Se están organizando para responder?",
-        },
-        {
-            "clave": "expectativas",
-            "texto": "🎯 *9. Qué esperan*\n\n¿Qué esperan lograr al visibilizar esta situación? ¿Hay demanda específica hacia alguna autoridad?",
-        },
-        {
-            "clave": "contraste",
-            "texto": "⚖️ *10. Contraste editorial*\n\n¿Refugio debería buscar la palabra de la institución, funcionario o empresa señalada antes de publicar? ¿O se publica tal como llega y esperamos una eventual respuesta?",
-        },
+        {"clave": "naturaleza", "texto": "🔍 *1. Naturaleza del problema*\n\n¿Qué tipo de situación se vive? (vulneración de derechos, discriminación, obstáculos para acceder a servicios, abuso institucional, violencia, trámite irregular). ¿Es un hecho puntual o una situación sostenida? ¿Afecta a una o muchas personas en situación similar?"},
+        {"clave": "personas_afectadas", "texto": "👥 *2. Personas afectadas*\n\n¿Quiénes son las personas afectadas? ¿Se trata de una persona, familia, comunidad? ¿De qué país o comunidad provienen? ¿Qué las llevó a dejar su lugar de origen? ¿Hace cuánto viven en el país donde ocurre la situación? ¿Cuál es su situación migratoria actual (con residencia, en trámite, solicitantes de refugio, situación irregular)? ¿Hay dimensiones específicas (niñez, personas mayores, embarazadas, mujeres víctimas de violencia de género, personas LGBTIQ+, personas con discapacidad)?"},
+        {"clave": "identificacion_afectadas", "texto": "🔐 *3. Cómo quieren ser identificadas*\n\n¿Cómo les gustaría a las personas afectadas ser identificadas en la nota? ¿Con sus nombres completos, iniciales o seudónimo? _Si están en situación de solicitud de refugio o irregularidad, siempre es mejor proteger su identidad._"},
+        {"clave": "responsables", "texto": "🏛️ *4. Responsables*\n\n¿Quiénes son los responsables? (autoridad estatal, institución pública, empresa, particular). ¿Nombre, cargo, dependencia concreta? ¿Existe un marco normativo que se está incumpliendo?"},
+        {"clave": "lugar_momento", "texto": "📍 *5. Lugar y momento*\n\n¿Dónde ocurre? (país, provincia, ciudad, barrio, dirección). ¿Cuándo? ¿Hecho puntual o sostenido en el tiempo?"},
+        {"clave": "gestiones", "texto": "📋 *6. Gestiones previas*\n\n¿Las personas afectadas ya hicieron denuncia formal? ¿Dónde? ¿Número de expediente o acta? ¿Contactaron algún organismo, ONG, consulado, defensoría? ¿Qué respuesta recibieron?"},
+        {"clave": "testimonios", "texto": "📢 *7. Testimonios y pruebas*\n\n¿Hay otras personas que hayan vivido o visto lo mismo y puedan testimoniar? ¿Documentos, capturas, audios, comunicaciones oficiales, pruebas materiales? ¿Alguna fuente experta (organización, abogada, académica, referente) que pueda aportar contexto?"},
+        {"clave": "impacto", "texto": "💥 *8. Impacto personal y comunitario*\n\n¿Cómo afecta la vida cotidiana de las personas? _(sin enfocar solo en el sufrimiento — también en cómo resisten, se organizan, se defienden)_ ¿Qué consecuencias tiene en la comunidad más amplia? ¿Se están organizando para responder?"},
+        {"clave": "expectativas", "texto": "🎯 *9. Qué esperan*\n\n¿Qué esperan lograr al visibilizar esta situación? ¿Hay demanda específica hacia alguna autoridad?"},
+        {"clave": "contraste", "texto": "⚖️ *10. Contraste editorial*\n\n¿Refugio debería buscar la palabra de la institución, funcionario o empresa señalada antes de publicar? ¿O se publica tal como llega y esperamos una eventual respuesta?"},
     ],
 }
 
@@ -204,7 +151,7 @@ def obtener_flujo(genero_key: str) -> dict:
 
 
 # ═══════════════════════════════════════════════════════════════
-# PROMPTS EDITORIALES POR GÉNERO
+# PROMPTS EDITORIALES
 # ═══════════════════════════════════════════════════════════════
 
 PROMPT_BASE = """Sos editor/a periodístico de Refugio Latinoamericano, medio digital especializado en periodismo de migraciones con perspectiva de derechos humanos e interculturalidad.
@@ -293,7 +240,6 @@ def obtener_prompt(genero_key: str) -> str:
 
 def llamar_groq(messages: list, max_tokens: int = 400, temperature: float = 0.3,
                 response_format: dict = None) -> str | None:
-    """Función centralizada para llamar a Groq/Llama."""
     api_key = os.getenv("GROQ_API_KEY")
     if not api_key:
         logger.error("Falta GROQ_API_KEY")
@@ -335,33 +281,14 @@ Evaluá la respuesta siguiendo estos tres criterios:
 2. INCONSISTENCIA TEMPORAL: ¿Aparecen referencias contradictorias (ej: "ayer" y "el mes pasado" juntos)?
 3. AMBIGÜEDAD: ¿Falta información clave que la pregunta requería?
 
-IMPORTANTE: No repreguntés si la respuesta es clara, rica y completa, aunque sea breve. Una respuesta de 10 palabras puede ser perfectamente válida si es concreta y específica.
+IMPORTANTE: No repreguntés si la respuesta es clara, rica y completa, aunque sea breve.
 
 Respondé SOLO con un JSON válido con esta estructura exacta:
 {
   "necesita_repregunta": true/false,
   "tipo": "profundidad" | "inconsistencia" | "ambiguedad" | null,
-  "repregunta": "texto de la repregunta con eco empático (parafraseo breve + nueva pregunta)" | null
-}
-
-Si necesita_repregunta es false, los otros campos son null.
-
-EJEMPLOS:
-
-Ejemplo profundidad:
-Pregunta: "¿Qué ocurrió?"
-Respuesta corta: "Hubo un allanamiento."
-JSON: {"necesita_repregunta": true, "tipo": "profundidad", "repregunta": "Entiendo que hubo un allanamiento. Para poder contarlo bien, ¿podés darme más contexto? ¿Quiénes participaron, qué buscaban, cómo fue el momento?"}
-
-Ejemplo inconsistencia:
-Pregunta: "¿Cuándo ocurrió?"
-Respuesta: "Fue ayer, pero viene pasando desde el mes pasado."
-JSON: {"necesita_repregunta": true, "tipo": "inconsistencia", "repregunta": "Noté que mencionaste 'ayer' y también 'el mes pasado'. ¿Podés aclararme las fechas? ¿Cuándo fue el hecho puntual y cuándo arrancó la situación?"}
-
-Ejemplo respuesta completa (NO repregunta):
-Pregunta: "¿Dónde ocurrió?"
-Respuesta: "En el barrio La Cárcova, en José León Suárez, partido de San Martín."
-JSON: {"necesita_repregunta": false, "tipo": null, "repregunta": null}"""
+  "repregunta": "texto de la repregunta con eco empático" | null
+}"""
 
 
 def analizar_respuesta_con_groq(pregunta: str, respuesta: str) -> dict:
@@ -418,11 +345,9 @@ async def transcribir_audio_groq(file_id: str, bot) -> str:
 # ═══════════════════════════════════════════════════════════════
 
 def generar_borrador(respuestas: dict, nombre: str, genero_key: str, fotos: int) -> str:
-    """Genera el borrador periodístico usando Groq/Llama."""
     prompt_sistema = obtener_prompt(genero_key)
     genero_nombre = GENEROS[genero_key]["nombre"]
     datos = "\n".join(f"{k.upper()}: {v}" for k, v in respuestas.items())
-
     resultado = llamar_groq(
         messages=[
             {"role": "system", "content": prompt_sistema},
@@ -437,9 +362,51 @@ def generar_borrador(respuestas: dict, nombre: str, genero_key: str, fotos: int)
         max_tokens=3000,
         temperature=0.7
     )
-    if resultado:
-        return resultado
-    return "❌ Error al generar el borrador. Intentá de nuevo con /start."
+    return resultado if resultado else "❌ Error al generar el borrador. Intentá de nuevo con /start."
+
+
+# ═══════════════════════════════════════════════════════════════
+# RESUMEN EDITABLE
+# ═══════════════════════════════════════════════════════════════
+
+def construir_resumen(respuestas: dict, flujo: dict) -> str:
+    """Construye el texto del resumen numerado de todas las respuestas."""
+    preguntas = flujo["preguntas"]
+    lineas = ["📋 *Resumen de tu reporte*\n"]
+    for i, pregunta in enumerate(preguntas):
+        clave = pregunta["clave"]
+        # Extraer título corto de la pregunta (primera línea sin markdown)
+        titulo = pregunta["texto"].split("\n")[0].replace("*", "").strip()
+        respuesta = respuestas.get(clave, "_Sin respuesta_")
+        # Truncar respuestas largas en el resumen
+        if len(respuesta) > 200:
+            respuesta = respuesta[:200] + "..."
+        lineas.append(f"*{i+1}. {titulo}*\n{respuesta}")
+    return "\n\n".join(lineas)
+
+
+def teclado_resumen() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("✏️ Editar una respuesta", callback_data="resumen:editar")],
+        [InlineKeyboardButton("✅ Todo correcto, continuar", callback_data="resumen:confirmar")],
+    ])
+
+
+def teclado_numeros(flujo: dict) -> InlineKeyboardMarkup:
+    """Genera botones numéricos para seleccionar qué respuesta editar."""
+    preguntas = flujo["preguntas"]
+    total = len(preguntas)
+    botones = []
+    fila = []
+    for i in range(total):
+        fila.append(InlineKeyboardButton(str(i + 1), callback_data=f"editar:{i}"))
+        if len(fila) == 5:
+            botones.append(fila)
+            fila = []
+    if fila:
+        botones.append(fila)
+    botones.append([InlineKeyboardButton("↩️ Volver al resumen", callback_data="resumen:volver")])
+    return InlineKeyboardMarkup(botones)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -493,7 +460,6 @@ def enviar_con_resend(borrador: str, nombre: str, titulo: str, genero_nombre: st
     editorial_email = os.getenv("EDITORIAL_EMAIL")
     if not api_key or not editorial_email:
         return False
-
     n_fotos = len(fotos_bytes) if fotos_bytes else 0
     tiene_video = "Sí" if video_bytes else "No"
     cuerpo = (
@@ -526,7 +492,6 @@ def enviar_con_resend(borrador: str, nombre: str, titulo: str, genero_nombre: st
         })
     if attachments:
         payload["attachments"] = attachments
-
     try:
         r = requests.post(
             "https://api.resend.com/emails",
@@ -560,6 +525,32 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         parse_mode="Markdown", reply_markup=ReplyKeyboardRemove()
     )
     return AUTENTICACION
+
+
+async def reiniciar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Reinicia el flujo manteniendo nombre y autenticación."""
+    nombre = context.user_data.get("nombre", "")
+    context.user_data.clear()
+    if nombre:
+        context.user_data["nombre"] = nombre
+
+    teclado = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📖 Historia de vida", callback_data="genero:historia_vida")],
+        [InlineKeyboardButton("⚖️ Denuncia", callback_data="genero:denuncia")],
+        [InlineKeyboardButton("📅 Evento", callback_data="genero:evento")],
+        [InlineKeyboardButton("📌 Agenda / Servicio", callback_data="genero:agenda")],
+        [InlineKeyboardButton("📚 Explicador", callback_data="genero:explicador")],
+        [InlineKeyboardButton("🎭 Cultura", callback_data="genero:cultura")],
+        [InlineKeyboardButton("📰 Reportaje", callback_data="genero:reportaje")],
+    ])
+
+    msg = (
+        f"🔄 *Nuevo reporte*{f' — {nombre}' if nombre else ''}\n\n"
+        "¿Qué tipo de nota vas a registrar?\n\n"
+        "_Elegí el género periodístico que mejor se adapta._"
+    )
+    await update.message.reply_text(msg, parse_mode="Markdown", reply_markup=teclado)
+    return SELECCION_GENERO
 
 
 async def handle_autenticacion(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -612,6 +603,9 @@ async def handle_seleccion_genero(update: Update, context: ContextTypes.DEFAULT_
     context.user_data["genero"] = genero_key
     context.user_data["pregunta_idx"] = 0
     context.user_data["repregunta_activa"] = False
+    context.user_data["respuestas"] = {}
+    context.user_data["fotos"] = 0
+    context.user_data["foto_ids"] = []
 
     flujo = obtener_flujo(genero_key)
     genero_nombre = GENEROS[genero_key]["nombre"]
@@ -716,9 +710,36 @@ async def procesar_respuesta(update, context, texto_respuesta: str) -> int:
         await enviar_pregunta_actual(update.message, context)
         return RESPONDIENDO_PREGUNTA
     else:
+        # Todas las preguntas respondidas → mostrar resumen
+        return await mostrar_resumen(update.message, context)
+
+
+async def mostrar_resumen(message, context) -> int:
+    """Muestra el resumen completo con opciones de editar o confirmar."""
+    genero_key = context.user_data["genero"]
+    flujo = obtener_flujo(genero_key)
+    resumen = construir_resumen(context.user_data["respuestas"], flujo)
+
+    await message.reply_text(
+        resumen + "\n\n_Revisá tus respuestas antes de continuar._",
+        parse_mode="Markdown",
+        reply_markup=teclado_resumen()
+    )
+    return REVISION_RESUMEN
+
+
+async def handle_revision_resumen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Maneja las acciones del resumen: editar o confirmar."""
+    query = update.callback_query
+    await query.answer()
+    accion = query.data.split(":")[1]
+
+    if accion == "confirmar":
+        genero_key = context.user_data["genero"]
         fotos_min = GENEROS[genero_key]["fotos_min"]
-        await update.message.reply_text(
-            f"✅ *¡Todas las preguntas completas!*\n\n"
+        await query.edit_message_reply_markup(reply_markup=None)
+        await query.message.reply_text(
+            f"✅ *Reporte confirmado.*\n\n"
             f"📸 Enviame *al menos {fotos_min} foto{'s' if fotos_min > 1 else ''}* del hecho.\n"
             f"🎥 Opcionalmente, podés adjuntar *un video de hasta 30 segundos*.\n\n"
             f"⚠️ _Videos más largos no serán procesados._\n\n"
@@ -727,6 +748,92 @@ async def procesar_respuesta(update, context, texto_respuesta: str) -> int:
         )
         return ESPERANDO_FOTOS
 
+    elif accion == "editar":
+        genero_key = context.user_data["genero"]
+        flujo = obtener_flujo(genero_key)
+        await query.edit_message_reply_markup(reply_markup=None)
+        await query.message.reply_text(
+            "✏️ *¿Qué respuesta querés editar?*\n\n_Tocá el número correspondiente:_",
+            parse_mode="Markdown",
+            reply_markup=teclado_numeros(flujo)
+        )
+        return REVISION_RESUMEN
+
+    elif accion == "volver":
+        return await mostrar_resumen(query.message, context)
+
+    return REVISION_RESUMEN
+
+
+async def handle_seleccion_editar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """El corresponsal seleccionó qué pregunta editar."""
+    query = update.callback_query
+    await query.answer()
+    idx = int(query.data.split(":")[1])
+
+    genero_key = context.user_data["genero"]
+    flujo = obtener_flujo(genero_key)
+    pregunta = flujo["preguntas"][idx]
+
+    context.user_data["editando_idx"] = idx
+    context.user_data["editando_clave"] = pregunta["clave"]
+
+    respuesta_actual = context.user_data["respuestas"].get(pregunta["clave"], "_Sin respuesta_")
+    if len(respuesta_actual) > 300:
+        respuesta_actual = respuesta_actual[:300] + "..."
+
+    teclado = construir_teclado(pregunta["texto"], pregunta["clave"])
+
+    await query.edit_message_reply_markup(reply_markup=None)
+    await query.message.reply_text(
+        f"✏️ *Editando pregunta {idx+1}*\n\n"
+        f"{pregunta['texto']}\n\n"
+        f"_Respuesta actual:_\n{respuesta_actual}\n\n"
+        f"_Escribí la nueva respuesta o grabá un audio:_",
+        parse_mode="Markdown",
+        reply_markup=teclado
+    )
+    return EDITANDO_RESPUESTA
+
+
+async def handle_edicion_texto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    return await procesar_edicion(update, context, update.message.text)
+
+
+async def handle_edicion_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await update.message.reply_text("🎙️ _Transcribiendo audio..._", parse_mode="Markdown")
+    voice = update.message.voice or update.message.audio
+    texto = await transcribir_audio_groq(voice.file_id, context.bot)
+    await update.message.reply_text(f"📝 *Transcripción:*\n_{texto}_", parse_mode="Markdown")
+    return await procesar_edicion(update, context, texto)
+
+
+async def procesar_edicion(update, context, texto_nuevo: str) -> int:
+    """Guarda la edición y vuelve al resumen."""
+    if len(texto_nuevo.strip()) < 3:
+        await update.message.reply_text("📝 La respuesta es muy corta. Intentá de nuevo.")
+        return EDITANDO_RESPUESTA
+
+    clave = context.user_data.get("editando_clave")
+    idx = context.user_data.get("editando_idx")
+
+    if clave:
+        context.user_data["respuestas"][clave] = texto_nuevo
+        await update.message.reply_text(
+            f"✅ *Respuesta {idx+1} actualizada.*",
+            parse_mode="Markdown"
+        )
+
+    # Limpiar estado de edición y volver al resumen
+    context.user_data.pop("editando_idx", None)
+    context.user_data.pop("editando_clave", None)
+
+    return await mostrar_resumen(update.message, context)
+
+
+# ═══════════════════════════════════════════════════════════════
+# HANDLERS DE FOTOS, VIDEO Y GENERACIÓN
+# ═══════════════════════════════════════════════════════════════
 
 async def handle_foto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     foto = update.message.photo[-1]
@@ -813,11 +920,12 @@ async def cmd_generar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         await update.message.reply_text(
             f"✅ *Borrador enviado.*\n"
             f"📰 Género: {genero_nombre}\n"
-            f"👤 Corresponsal: {nombre}\n{info}\n\n_/start para nuevo reporte_",
+            f"👤 Corresponsal: {nombre}\n{info}\n\n"
+            f"_Usá /reiniciar para un nuevo reporte_",
             parse_mode="Markdown")
     else:
         await update.message.reply_text(
-            "✅ *Borrador generado.*\n_/start para nuevo reporte_",
+            "✅ *Borrador generado.*\n_Usá /reiniciar para un nuevo reporte_",
             parse_mode="Markdown")
     return ConversationHandler.END
 
@@ -840,7 +948,10 @@ def main():
     app = Application.builder().token(token).build()
 
     conv = ConversationHandler(
-        entry_points=[CommandHandler("start", start)],
+        entry_points=[
+            CommandHandler("start", start),
+            CommandHandler("reiniciar", reiniciar),
+        ],
         states={
             AUTENTICACION: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_autenticacion)],
             IDENTIFICACION: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_identificacion)],
@@ -850,62 +961,74 @@ def main():
                 MessageHandler(filters.VOICE | filters.AUDIO, handle_respuesta_audio),
                 MessageHandler(filters.StatusUpdate.WEB_APP_DATA, handle_respuesta_miniapp),
             ],
+            REVISION_RESUMEN: [
+                CallbackQueryHandler(handle_revision_resumen, pattern=r"^resumen:"),
+                CallbackQueryHandler(handle_seleccion_editar, pattern=r"^editar:"),
+            ],
+            EDITANDO_RESPUESTA: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_edicion_texto),
+                MessageHandler(filters.VOICE | filters.AUDIO, handle_edicion_audio),
+            ],
             ESPERANDO_FOTOS: [
                 MessageHandler(filters.PHOTO, handle_foto),
                 MessageHandler(filters.VIDEO, handle_video),
-                CommandHandler("generar", cmd_generar)
+                CommandHandler("generar", cmd_generar),
             ],
         },
-        fallbacks=[CommandHandler("cancelar", cancelar), CommandHandler("generar", cmd_generar)],
+        fallbacks=[
+            CommandHandler("cancelar", cancelar),
+            CommandHandler("reiniciar", reiniciar),
+            CommandHandler("generar", cmd_generar),
+        ],
     )
     app.add_handler(conv)
 
     # Servidor web mínimo para que Render detecte el servicio activo
-   # ═══════════════════════════════════════════════════════════════
-# HEALTHCHECK SERVER PARA RENDER + UPTIMEROBOT
-# ═══════════════════════════════════════════════════════════════
+    import threading
+    from http.server import HTTPServer, BaseHTTPRequestHandler
 
-import threading
-from http.server import HTTPServer, BaseHTTPRequestHandler
+    class HealthHandler(BaseHTTPRequestHandler):
 
-class HealthHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
 
-    def do_GET(self):
+            if self.path == "/":
+                self.send_response(200)
+                self.send_header("Content-type", "application/json")
+                self.end_headers()
+                self.wfile.write(
+                    b'{"status":"online","service":"chatbot-refugio-latinoamericano"}'
+                )
 
-        if self.path == "/":
-            self.send_response(200)
-            self.send_header("Content-type", "application/json")
-            self.end_headers()
-            self.wfile.write(
-                b'{"status":"online","service":"chatbot-refugio-latinoamericano"}'
-            )
+            elif self.path == "/health":
+                self.send_response(200)
+                self.send_header("Content-type", "application/json")
+                self.end_headers()
+                self.wfile.write(
+                    b'{"status":"ok"}'
+                )
 
-        elif self.path == "/health":
-            self.send_response(200)
-            self.send_header("Content-type", "application/json")
-            self.end_headers()
-            self.wfile.write(
-                b'{"status":"ok"}'
-            )
+            else:
+                self.send_response(404)
+                self.end_headers()
 
-        else:
-            self.send_response(404)
-            self.end_headers()
+        def log_message(self, format, *args):
+            return
 
-    def log_message(self, format, *args):
-        return
+    port = int(os.getenv("PORT", 8080))
 
-port = int(os.getenv("PORT", 8080))
+    server = HTTPServer(("0.0.0.0", port), HealthHandler)
 
-server = HTTPServer(("0.0.0.0", port), HealthHandler)
+    thread = threading.Thread(target=server.serve_forever)
+    thread.daemon = True
+    thread.start()
 
-thread = threading.Thread(target=server.serve_forever)
-thread.daemon = True
-thread.start()
+    logger.info(f"Health server corriendo en puerto {port}")
 
-logger.info(f"Health server corriendo en puerto {port}")
+    logger.info(
+        "Chatbot Refugio Latinoamericano v5 — Groq para todo "
+        "(transcripción + repreguntas + borradores)..."
+    )
 
-    logger.info("Chatbot Refugio Latinoamericano v5 — Groq para todo (transcripción + repreguntas + borradores)...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
