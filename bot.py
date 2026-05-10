@@ -1,15 +1,14 @@
 """
-CHATBOT REFUGIO LATINOAMERICANO — bot.py v4
+CHATBOT REFUGIO LATINOAMERICANO — bot.py v5
 Incorpora: selección de género periodístico + flujos diferenciados + motor de repreguntas
 
 Variables de entorno:
   TELEGRAM_BOT_TOKEN  → token del bot de Telegram
-  GROQ_API_KEY        → transcripción de audio (Whisper) + motor de repreguntas (Llama)
-  DEEPSEEK_API_KEY    → generación de borradores periodísticos
+  GROQ_API_KEY        → transcripción de audio (Whisper) + repreguntas (Llama) + generación de borradores (Llama)
   RESEND_API_KEY      → envío de email al equipo editorial
   EDITORIAL_EMAIL     → destinatario del borrador
   BOT_PASSWORD        → contraseña de acceso al bot
-  MINI_APP_URL        → URL pública de la mini app de grabación de audio (opcional)
+  MINI_APP_URL        → URL pública de la mini app de grabación (opcional)
 """
 
 import os
@@ -289,7 +288,43 @@ def obtener_prompt(genero_key: str) -> str:
 
 
 # ═══════════════════════════════════════════════════════════════
-# MOTOR DE REPREGUNTAS (usa Groq/Llama — rápido y gratuito)
+# FUNCIÓN CENTRALIZADA GROQ
+# ═══════════════════════════════════════════════════════════════
+
+def llamar_groq(messages: list, max_tokens: int = 400, temperature: float = 0.3,
+                response_format: dict = None) -> str | None:
+    """Función centralizada para llamar a Groq/Llama."""
+    api_key = os.getenv("GROQ_API_KEY")
+    if not api_key:
+        logger.error("Falta GROQ_API_KEY")
+        return None
+    payload = {
+        "model": "llama-3.3-70b-versatile",
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+    }
+    if response_format:
+        payload["response_format"] = response_format
+    try:
+        r = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json=payload,
+            timeout=90
+        )
+        data = r.json()
+        if "choices" in data:
+            return data["choices"][0]["message"]["content"]
+        logger.error(f"Error Groq: {data.get('error', {}).get('message', 'desconocido')}")
+        return None
+    except Exception as e:
+        logger.error(f"Error llamando a Groq: {e}")
+        return None
+
+
+# ═══════════════════════════════════════════════════════════════
+# MOTOR DE REPREGUNTAS
 # ═══════════════════════════════════════════════════════════════
 
 PROMPT_ANALISTA = """Sos un editor/a periodístico analizando una respuesta de un corresponsal de campo.
@@ -311,7 +346,7 @@ Respondé SOLO con un JSON válido con esta estructura exacta:
 
 Si necesita_repregunta es false, los otros campos son null.
 
-EJEMPLOS DE REPREGUNTAS CON ECO EMPÁTICO:
+EJEMPLOS:
 
 Ejemplo profundidad:
 Pregunta: "¿Qué ocurrió?"
@@ -321,7 +356,7 @@ JSON: {"necesita_repregunta": true, "tipo": "profundidad", "repregunta": "Entien
 Ejemplo inconsistencia:
 Pregunta: "¿Cuándo ocurrió?"
 Respuesta: "Fue ayer, pero viene pasando desde el mes pasado."
-JSON: {"necesita_repregunta": true, "tipo": "inconsistencia", "repregunta": "Noté que mencionaste 'ayer' y también 'el mes pasado'. ¿Podés aclararme las fechas para no confundir a los lectores? ¿Cuándo fue el hecho puntual y cuándo arrancó la situación?"}
+JSON: {"necesita_repregunta": true, "tipo": "inconsistencia", "repregunta": "Noté que mencionaste 'ayer' y también 'el mes pasado'. ¿Podés aclararme las fechas? ¿Cuándo fue el hecho puntual y cuándo arrancó la situación?"}
 
 Ejemplo respuesta completa (NO repregunta):
 Pregunta: "¿Dónde ocurrió?"
@@ -330,39 +365,25 @@ JSON: {"necesita_repregunta": false, "tipo": null, "repregunta": null}"""
 
 
 def analizar_respuesta_con_groq(pregunta: str, respuesta: str) -> dict:
-    """Analiza la respuesta con Groq/Llama y determina si requiere repregunta."""
-    api_key = os.getenv("GROQ_API_KEY")
-    if not api_key:
-        return {"necesita_repregunta": False, "tipo": None, "repregunta": None}
-
-    try:
-        r = requests.post(
-            "https://api.groq.com/openai/v1/chat/completions",
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            json={
-                "model": "llama-3.3-70b-versatile",
-                "messages": [
-                    {"role": "system", "content": PROMPT_ANALISTA},
-                    {"role": "user", "content": f"PREGUNTA:\n{pregunta}\n\nRESPUESTA DEL CORRESPONSAL:\n{respuesta}\n\nAnalizá y respondé SOLO con el JSON."}
-                ],
-                "max_tokens": 400,
-                "temperature": 0.3,
-                "response_format": {"type": "json_object"}
-            },
-            timeout=30
-        )
-        data = r.json()
-        if "choices" in data:
-            contenido = data["choices"][0]["message"]["content"]
-            return json.loads(contenido)
-    except Exception as e:
-        logger.error(f"Error en análisis Groq: {e}")
-
+    resultado = llamar_groq(
+        messages=[
+            {"role": "system", "content": PROMPT_ANALISTA},
+            {"role": "user", "content": f"PREGUNTA:\n{pregunta}\n\nRESPUESTA DEL CORRESPONSAL:\n{respuesta}\n\nAnalizá y respondé SOLO con el JSON."}
+        ],
+        max_tokens=400,
+        temperature=0.3,
+        response_format={"type": "json_object"}
+    )
+    if resultado:
+        try:
+            return json.loads(resultado)
+        except Exception as e:
+            logger.error(f"Error parseando JSON repreguntas: {e}")
     return {"necesita_repregunta": False, "tipo": None, "repregunta": None}
 
 
 # ═══════════════════════════════════════════════════════════════
-# TRANSCRIPCIÓN DE AUDIO (usa Groq/Whisper — rápido y gratuito)
+# TRANSCRIPCIÓN DE AUDIO
 # ═══════════════════════════════════════════════════════════════
 
 async def transcribir_audio_groq(file_id: str, bot) -> str:
@@ -393,47 +414,32 @@ async def transcribir_audio_groq(file_id: str, bot) -> str:
 
 
 # ═══════════════════════════════════════════════════════════════
-# GENERACIÓN DEL BORRADOR (usa DeepSeek — mejor calidad editorial)
+# GENERACIÓN DEL BORRADOR
 # ═══════════════════════════════════════════════════════════════
 
 def generar_borrador(respuestas: dict, nombre: str, genero_key: str, fotos: int) -> str:
-    """Genera el borrador periodístico usando DeepSeek."""
-    api_key = os.getenv("DEEPSEEK_API_KEY")
-    if not api_key:
-        return "❌ Falta DEEPSEEK_API_KEY."
-
+    """Genera el borrador periodístico usando Groq/Llama."""
     prompt_sistema = obtener_prompt(genero_key)
     genero_nombre = GENEROS[genero_key]["nombre"]
     datos = "\n".join(f"{k.upper()}: {v}" for k, v in respuestas.items())
 
-    try:
-        r = requests.post(
-            "https://api.deepseek.com/chat/completions",
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            json={
-                "model": "deepseek-chat",
-                "messages": [
-                    {"role": "system", "content": prompt_sistema},
-                    {"role": "user", "content": (
-                        f"GÉNERO: {genero_nombre}\n\n"
-                        f"REPORTE DEL CORRESPONSAL:\n{datos}\n\n"
-                        f"Corresponsal: {nombre}\n"
-                        f"Fotos adjuntas: {fotos}\n\n"
-                        f"Redactá el borrador completo respetando TODOS los criterios editoriales."
-                    )}
-                ],
-                "max_tokens": 3000,
-                "temperature": 0.7
-            },
-            timeout=90
-        )
-        data = r.json()
-        if "choices" in data:
-            return data["choices"][0]["message"]["content"]
-        return f"❌ Error DeepSeek: {data.get('error', {}).get('message', 'desconocido')}"
-    except Exception as e:
-        logger.error(f"Error DeepSeek: {e}")
-        return "❌ Error al conectar con DeepSeek."
+    resultado = llamar_groq(
+        messages=[
+            {"role": "system", "content": prompt_sistema},
+            {"role": "user", "content": (
+                f"GÉNERO: {genero_nombre}\n\n"
+                f"REPORTE DEL CORRESPONSAL:\n{datos}\n\n"
+                f"Corresponsal: {nombre}\n"
+                f"Fotos adjuntas: {fotos}\n\n"
+                f"Redactá el borrador completo respetando TODOS los criterios editoriales."
+            )}
+        ],
+        max_tokens=3000,
+        temperature=0.7
+    )
+    if resultado:
+        return resultado
+    return "❌ Error al generar el borrador. Intentá de nuevo con /start."
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -688,7 +694,6 @@ async def procesar_respuesta(update, context, texto_respuesta: str) -> int:
                 context.user_data["respuestas"][pregunta["clave"]] = texto_respuesta
             else:
                 context.user_data["respuestas"][pregunta["clave"]] += f"\n\n[Ampliación 1]: {texto_respuesta}"
-
             context.user_data["repregunta_activa"] = True
             await update.message.reply_text(f"💬 {analisis['repregunta']}", parse_mode="Markdown")
             return RESPONDIENDO_PREGUNTA
@@ -781,11 +786,10 @@ async def cmd_generar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
             parse_mode="Markdown")
         return ESPERANDO_FOTOS
 
-    await update.message.reply_text("⏳ *Generando borrador con DeepSeek...*", parse_mode="Markdown")
+    await update.message.reply_text("⏳ *Generando borrador...*", parse_mode="Markdown")
     nombre = context.user_data.get("nombre", "corresponsal")
     genero_nombre = GENEROS[genero_key]["nombre"]
 
-    # ✅ Llamada correcta a generar_borrador (DeepSeek)
     borrador = generar_borrador(context.user_data.get("respuestas", {}), nombre, genero_key, fotos)
     titulo = extraer_titulo(borrador)
 
@@ -866,7 +870,7 @@ def main():
             self.end_headers()
             self.wfile.write(b"OK")
         def log_message(self, format, *args):
-            pass  # silencia los logs del servidor
+            pass
 
     port = int(os.getenv("PORT", 8080))
     server = HTTPServer(("0.0.0.0", port), HealthHandler)
@@ -875,7 +879,7 @@ def main():
     thread.start()
     logger.info(f"Health server corriendo en puerto {port}")
 
-    logger.info("Chatbot Refugio Latinoamericano v4 corriendo — DeepSeek + Groq activos...")
+    logger.info("Chatbot Refugio Latinoamericano v5 — Groq para todo (transcripción + repreguntas + borradores)...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
