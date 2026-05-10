@@ -390,22 +390,21 @@ async def transcribir_audio_groq(file_id: str, bot) -> str:
 # GENERACIÓN DEL BORRADOR
 # ═══════════════════════════════════════════════════════════════
 
-def generar_con_groq(respuestas: dict, nombre: str, genero_key: str, fotos: int) -> str:
-    api_key = os.getenv("GROQ_API_KEY")
+def generar_borrador(respuestas: dict, nombre: str, genero_key: str, fotos: int) -> str:
+    api_key = os.getenv("DEEPSEEK_API_KEY")
     if not api_key:
-        return "❌ Falta GROQ_API_KEY."
+        return "❌ Falta DEEPSEEK_API_KEY."
 
     prompt_sistema = obtener_prompt(genero_key)
     genero_nombre = GENEROS[genero_key]["nombre"]
-
     datos = "\n".join(f"{k.upper()}: {v}" for k, v in respuestas.items())
 
     try:
         r = requests.post(
-            "https://api.groq.com/openai/v1/chat/completions",
+            "https://api.deepseek.com/chat/completions",
             headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
             json={
-                "model": "llama-3.3-70b-versatile",
+                "model": "deepseek-chat",
                 "messages": [
                     {"role": "system", "content": prompt_sistema},
                     {"role": "user", "content": f"GÉNERO: {genero_nombre}\n\nREPORTE DEL CORRESPONSAL:\n{datos}\n\nCorresponsal: {nombre}\nFotos adjuntas: {fotos}\n\nRedactá el borrador completo respetando TODOS los criterios editoriales."}
@@ -420,9 +419,8 @@ def generar_con_groq(respuestas: dict, nombre: str, genero_key: str, fotos: int)
             return data["choices"][0]["message"]["content"]
         return f"❌ Error: {data.get('error', {}).get('message', 'desconocido')}"
     except Exception as e:
-        logger.error(f"Error Groq: {e}")
+        logger.error(f"Error DeepSeek: {e}")
         return "❌ Error al conectar con la IA."
-
 
 # ═══════════════════════════════════════════════════════════════
 # MINI APP + MULTIMEDIA + EMAIL
