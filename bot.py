@@ -1,9 +1,15 @@
 """
-CHATBOT REFUGIO LATINOAMERICANO — bot.py v3
+CHATBOT REFUGIO LATINOAMERICANO — bot.py v4
 Incorpora: selección de género periodístico + flujos diferenciados + motor de repreguntas
 
 Variables de entorno:
-  TELEGRAM_BOT_TOKEN, GROQ_API_KEY, RESEND_API_KEY, EDITORIAL_EMAIL, BOT_PASSWORD, MINI_APP_URL
+  TELEGRAM_BOT_TOKEN  → token del bot de Telegram
+  GROQ_API_KEY        → transcripción de audio (Whisper) + motor de repreguntas (Llama)
+  DEEPSEEK_API_KEY    → generación de borradores periodísticos
+  RESEND_API_KEY      → envío de email al equipo editorial
+  EDITORIAL_EMAIL     → destinatario del borrador
+  BOT_PASSWORD        → contraseña de acceso al bot
+  MINI_APP_URL        → URL pública de la mini app de grabación de audio (opcional)
 """
 
 import os
@@ -11,7 +17,7 @@ import base64
 import logging
 import json
 import requests
-from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
+from telegram import Update, ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
     filters, ContextTypes, ConversationHandler, CallbackQueryHandler
@@ -173,7 +179,6 @@ FLUJO_DENUNCIA = {
     ],
 }
 
-# Flujos placeholder para los 5 géneros pendientes de afinar
 FLUJO_GENERICO_7W = {
     "entrada": "📰 *{nombre}*\n\nContame en tus propias palabras de qué se trata.",
     "preguntas": [
@@ -187,14 +192,13 @@ FLUJO_GENERICO_7W = {
     ],
 }
 
+
 def obtener_flujo(genero_key: str) -> dict:
-    """Retorna el flujo conversacional para el género dado."""
     if genero_key == "historia_vida":
         return FLUJO_HISTORIA_VIDA
     elif genero_key == "denuncia":
         return FLUJO_DENUNCIA
     else:
-        # Placeholder para los otros 5 géneros
         flujo = dict(FLUJO_GENERICO_7W)
         flujo["entrada"] = FLUJO_GENERICO_7W["entrada"].format(nombre=GENEROS[genero_key]["nombre"])
         return flujo
@@ -285,7 +289,7 @@ def obtener_prompt(genero_key: str) -> str:
 
 
 # ═══════════════════════════════════════════════════════════════
-# MOTOR DE REPREGUNTAS
+# MOTOR DE REPREGUNTAS (usa Groq/Llama — rápido y gratuito)
 # ═══════════════════════════════════════════════════════════════
 
 PROMPT_ANALISTA = """Sos un editor/a periodístico analizando una respuesta de un corresponsal de campo.
@@ -326,7 +330,7 @@ JSON: {"necesita_repregunta": false, "tipo": null, "repregunta": null}"""
 
 
 def analizar_respuesta_con_groq(pregunta: str, respuesta: str) -> dict:
-    """Analiza la respuesta y determina si requiere repregunta."""
+    """Analiza la respuesta con Groq/Llama y determina si requiere repregunta."""
     api_key = os.getenv("GROQ_API_KEY")
     if not api_key:
         return {"necesita_repregunta": False, "tipo": None, "repregunta": None}
@@ -350,16 +354,15 @@ def analizar_respuesta_con_groq(pregunta: str, respuesta: str) -> dict:
         data = r.json()
         if "choices" in data:
             contenido = data["choices"][0]["message"]["content"]
-            resultado = json.loads(contenido)
-            return resultado
+            return json.loads(contenido)
     except Exception as e:
-        logger.error(f"Error en análisis: {e}")
+        logger.error(f"Error en análisis Groq: {e}")
 
     return {"necesita_repregunta": False, "tipo": None, "repregunta": None}
 
 
 # ═══════════════════════════════════════════════════════════════
-# TRANSCRIPCIÓN DE AUDIO
+# TRANSCRIPCIÓN DE AUDIO (usa Groq/Whisper — rápido y gratuito)
 # ═══════════════════════════════════════════════════════════════
 
 async def transcribir_audio_groq(file_id: str, bot) -> str:
@@ -373,8 +376,11 @@ async def transcribir_audio_groq(file_id: str, bot) -> str:
             "https://api.groq.com/openai/v1/audio/transcriptions",
             headers={"Authorization": f"Bearer {api_key}"},
             files={"file": ("audio.ogg", bytes(audio_bytes), "audio/ogg")},
-            data={"model": "whisper-large-v3", "language": "es",
-                  "prompt": "Entrevista periodística sobre migraciones en América Latina."},
+            data={
+                "model": "whisper-large-v3",
+                "language": "es",
+                "prompt": "Entrevista periodística sobre migraciones en América Latina."
+            },
             timeout=60
         )
         data = response.json()
@@ -387,10 +393,11 @@ async def transcribir_audio_groq(file_id: str, bot) -> str:
 
 
 # ═══════════════════════════════════════════════════════════════
-# GENERACIÓN DEL BORRADOR
+# GENERACIÓN DEL BORRADOR (usa DeepSeek — mejor calidad editorial)
 # ═══════════════════════════════════════════════════════════════
 
 def generar_borrador(respuestas: dict, nombre: str, genero_key: str, fotos: int) -> str:
+    """Genera el borrador periodístico usando DeepSeek."""
     api_key = os.getenv("DEEPSEEK_API_KEY")
     if not api_key:
         return "❌ Falta DEEPSEEK_API_KEY."
@@ -407,7 +414,13 @@ def generar_borrador(respuestas: dict, nombre: str, genero_key: str, fotos: int)
                 "model": "deepseek-chat",
                 "messages": [
                     {"role": "system", "content": prompt_sistema},
-                    {"role": "user", "content": f"GÉNERO: {genero_nombre}\n\nREPORTE DEL CORRESPONSAL:\n{datos}\n\nCorresponsal: {nombre}\nFotos adjuntas: {fotos}\n\nRedactá el borrador completo respetando TODOS los criterios editoriales."}
+                    {"role": "user", "content": (
+                        f"GÉNERO: {genero_nombre}\n\n"
+                        f"REPORTE DEL CORRESPONSAL:\n{datos}\n\n"
+                        f"Corresponsal: {nombre}\n"
+                        f"Fotos adjuntas: {fotos}\n\n"
+                        f"Redactá el borrador completo respetando TODOS los criterios editoriales."
+                    )}
                 ],
                 "max_tokens": 3000,
                 "temperature": 0.7
@@ -417,10 +430,11 @@ def generar_borrador(respuestas: dict, nombre: str, genero_key: str, fotos: int)
         data = r.json()
         if "choices" in data:
             return data["choices"][0]["message"]["content"]
-        return f"❌ Error: {data.get('error', {}).get('message', 'desconocido')}"
+        return f"❌ Error DeepSeek: {data.get('error', {}).get('message', 'desconocido')}"
     except Exception as e:
         logger.error(f"Error DeepSeek: {e}")
-        return "❌ Error al conectar con la IA."
+        return "❌ Error al conectar con DeepSeek."
+
 
 # ═══════════════════════════════════════════════════════════════
 # MINI APP + MULTIMEDIA + EMAIL
@@ -431,7 +445,6 @@ def get_mini_app_url(pregunta_texto: str, clave: str) -> str:
     if not base_url:
         return ""
     import urllib.parse
-    # Limpiar texto para URL
     texto_limpio = pregunta_texto.replace("*", "").replace("_", "")[:200]
     params = urllib.parse.urlencode({"label": clave.upper(), "texto": texto_limpio, "key": clave})
     return f"{base_url}?{params}"
@@ -440,7 +453,9 @@ def get_mini_app_url(pregunta_texto: str, clave: str) -> str:
 def construir_teclado(pregunta_texto: str, clave: str):
     url = get_mini_app_url(pregunta_texto, clave)
     if url:
-        return InlineKeyboardMarkup([[InlineKeyboardButton("🎙️ Grabar respuesta en audio", web_app=WebAppInfo(url=url))]])
+        return InlineKeyboardMarkup([[
+            InlineKeyboardButton("🎙️ Grabar respuesta en audio", web_app=WebAppInfo(url=url))
+        ]])
     return None
 
 
@@ -467,11 +482,12 @@ async def descargar_video(video_id: str, bot) -> dict:
 
 
 def enviar_con_resend(borrador: str, nombre: str, titulo: str, genero_nombre: str,
-                     fotos_bytes: list = None, video_bytes: dict = None) -> bool:
+                      fotos_bytes: list = None, video_bytes: dict = None) -> bool:
     api_key = os.getenv("RESEND_API_KEY")
     editorial_email = os.getenv("EDITORIAL_EMAIL")
     if not api_key or not editorial_email:
         return False
+
     n_fotos = len(fotos_bytes) if fotos_bytes else 0
     tiene_video = "Sí" if video_bytes else "No"
     cuerpo = (
@@ -504,10 +520,14 @@ def enviar_con_resend(borrador: str, nombre: str, titulo: str, genero_nombre: st
         })
     if attachments:
         payload["attachments"] = attachments
+
     try:
-        r = requests.post("https://api.resend.com/emails",
+        r = requests.post(
+            "https://api.resend.com/emails",
             headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            json=payload, timeout=90)
+            json=payload,
+            timeout=90
+        )
         return r.status_code in [200, 201]
     except Exception as e:
         logger.error(f"Error Resend: {e}")
@@ -515,10 +535,10 @@ def enviar_con_resend(borrador: str, nombre: str, titulo: str, genero_nombre: st
 
 
 def extraer_titulo(borrador: str) -> str:
-    for l in borrador.split("\n"):
-        l = l.strip()
-        if l.startswith("TÍTULO:") or l.startswith("TITULO:"):
-            return l.split(":", 1)[1].strip()
+    for linea in borrador.split("\n"):
+        linea = linea.strip()
+        if linea.startswith("TÍTULO:") or linea.startswith("TITULO:"):
+            return linea.split(":", 1)[1].strip()
     return "Borrador sin título"
 
 
@@ -555,7 +575,6 @@ async def handle_identificacion(update: Update, context: ContextTypes.DEFAULT_TY
         return IDENTIFICACION
     context.user_data.update({"nombre": nombre, "respuestas": {}, "fotos": 0, "foto_ids": []})
 
-    # Mostrar menú de géneros con botones inline
     teclado = InlineKeyboardMarkup([
         [InlineKeyboardButton("📖 Historia de vida", callback_data="genero:historia_vida")],
         [InlineKeyboardButton("⚖️ Denuncia", callback_data="genero:denuncia")],
@@ -592,20 +611,15 @@ async def handle_seleccion_genero(update: Update, context: ContextTypes.DEFAULT_
     genero_nombre = GENEROS[genero_key]["nombre"]
 
     await query.edit_message_text(f"✅ Seleccionaste: *{genero_nombre}*", parse_mode="Markdown")
-
-    # Enviar mensaje de entrada del flujo
     await query.message.reply_text(
         flujo["entrada"] + "\n\n⚠️ _Ningún contenido se publica sin revisión editorial._",
         parse_mode="Markdown"
     )
-
-    # Enviar primera pregunta
     await enviar_pregunta_actual(query.message, context)
     return RESPONDIENDO_PREGUNTA
 
 
 async def enviar_pregunta_actual(message, context):
-    """Envía la pregunta actual con botón de Mini App."""
     genero_key = context.user_data["genero"]
     flujo = obtener_flujo(genero_key)
     idx = context.user_data["pregunta_idx"]
@@ -626,7 +640,6 @@ async def handle_respuesta_texto(update: Update, context: ContextTypes.DEFAULT_T
 
 
 async def handle_respuesta_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Recibe audio directo (reenviado) y lo transcribe."""
     await update.message.reply_text("🎙️ _Transcribiendo audio..._", parse_mode="Markdown")
     voice = update.message.voice or update.message.audio
     texto = await transcribir_audio_groq(voice.file_id, context.bot)
@@ -635,7 +648,6 @@ async def handle_respuesta_audio(update: Update, context: ContextTypes.DEFAULT_T
 
 
 async def handle_respuesta_miniapp(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Recibe el audio grabado desde la Mini App."""
     try:
         data = json.loads(update.effective_message.web_app_data.data)
         if data.get("type") == "audio":
@@ -644,7 +656,7 @@ async def handle_respuesta_miniapp(update: Update, context: ContextTypes.DEFAULT
             audio_b64 = data.get("audio_b64", "")
             if mini_app_url and audio_b64:
                 r = requests.post(f"{mini_app_url}/transcribir",
-                    json={"audio_b64": audio_b64}, timeout=60)
+                                  json={"audio_b64": audio_b64}, timeout=60)
                 if r.status_code == 200:
                     texto = r.json().get("texto", "")
                     await update.message.reply_text(f"📝 *Transcripción:*\n_{texto}_", parse_mode="Markdown")
@@ -658,40 +670,29 @@ async def handle_respuesta_miniapp(update: Update, context: ContextTypes.DEFAULT
 
 
 async def procesar_respuesta(update, context, texto_respuesta: str) -> int:
-    """Procesa una respuesta (texto o audio transcripto) aplicando el motor de repreguntas."""
     genero_key = context.user_data["genero"]
     flujo = obtener_flujo(genero_key)
     idx = context.user_data["pregunta_idx"]
     pregunta = flujo["preguntas"][idx]
 
-    # Validación mínima: respuesta no vacía
     if len(texto_respuesta.strip()) < 3:
         await update.message.reply_text("📝 Necesito más información para continuar.")
         return RESPONDIENDO_PREGUNTA
 
-    # MOTOR DE REPREGUNTAS (solo si no se hizo ya una repregunta en esta pregunta)
     if not context.user_data.get("repregunta_activa", False):
-        # Mostrar indicador
         await update.message.reply_text("🔎 _Analizando respuesta..._", parse_mode="Markdown")
         analisis = analizar_respuesta_con_groq(pregunta["texto"], texto_respuesta)
 
         if analisis.get("necesita_repregunta") and analisis.get("repregunta"):
-            # Guardamos la respuesta inicial
             if pregunta["clave"] not in context.user_data["respuestas"]:
                 context.user_data["respuestas"][pregunta["clave"]] = texto_respuesta
             else:
                 context.user_data["respuestas"][pregunta["clave"]] += f"\n\n[Ampliación 1]: {texto_respuesta}"
 
-            # Marcamos que ya hicimos una repregunta
             context.user_data["repregunta_activa"] = True
-
-            await update.message.reply_text(
-                f"💬 {analisis['repregunta']}",
-                parse_mode="Markdown"
-            )
+            await update.message.reply_text(f"💬 {analisis['repregunta']}", parse_mode="Markdown")
             return RESPONDIENDO_PREGUNTA
 
-    # Si ya hubo repregunta, concatenamos la ampliación
     if context.user_data.get("repregunta_activa", False):
         clave = pregunta["clave"]
         if clave in context.user_data["respuestas"]:
@@ -701,10 +702,7 @@ async def procesar_respuesta(update, context, texto_respuesta: str) -> int:
     else:
         context.user_data["respuestas"][pregunta["clave"]] = texto_respuesta
 
-    # Reseteamos flag para la próxima pregunta
     context.user_data["repregunta_activa"] = False
-
-    # Avanzar a la siguiente pregunta
     context.user_data["pregunta_idx"] += 1
     idx_nuevo = context.user_data["pregunta_idx"]
 
@@ -713,7 +711,6 @@ async def procesar_respuesta(update, context, texto_respuesta: str) -> int:
         await enviar_pregunta_actual(update.message, context)
         return RESPONDIENDO_PREGUNTA
     else:
-        # Terminaron las preguntas — pasar a fotos
         fotos_min = GENEROS[genero_key]["fotos_min"]
         await update.message.reply_text(
             f"✅ *¡Todas las preguntas completas!*\n\n"
@@ -784,11 +781,12 @@ async def cmd_generar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
             parse_mode="Markdown")
         return ESPERANDO_FOTOS
 
-    await update.message.reply_text("⏳ *Generando borrador...*", parse_mode="Markdown")
+    await update.message.reply_text("⏳ *Generando borrador con DeepSeek...*", parse_mode="Markdown")
     nombre = context.user_data.get("nombre", "corresponsal")
     genero_nombre = GENEROS[genero_key]["nombre"]
 
-    borrador = generar_con_groq(context.user_data.get("respuestas", {}), nombre, genero_key, fotos)
+    # ✅ Llamada correcta a generar_borrador (DeepSeek)
+    borrador = generar_borrador(context.user_data.get("respuestas", {}), nombre, genero_key, fotos)
     titulo = extraer_titulo(borrador)
 
     for i in range(0, len(borrador), 4000):
@@ -814,7 +812,9 @@ async def cmd_generar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
             f"👤 Corresponsal: {nombre}\n{info}\n\n_/start para nuevo reporte_",
             parse_mode="Markdown")
     else:
-        await update.message.reply_text("✅ *Borrador generado.*\n_/start para nuevo reporte_", parse_mode="Markdown")
+        await update.message.reply_text(
+            "✅ *Borrador generado.*\n_/start para nuevo reporte_",
+            parse_mode="Markdown")
     return ConversationHandler.END
 
 
@@ -832,6 +832,7 @@ def main():
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     if not token:
         raise ValueError("Falta TELEGRAM_BOT_TOKEN")
+
     app = Application.builder().token(token).build()
 
     conv = ConversationHandler(
@@ -874,7 +875,7 @@ def main():
     thread.start()
     logger.info(f"Health server corriendo en puerto {port}")
 
-    logger.info("Chatbot Refugio Latinoamericano v3 corriendo — motor de repreguntas activo...")
+    logger.info("Chatbot Refugio Latinoamericano v4 corriendo — DeepSeek + Groq activos...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
