@@ -861,23 +861,49 @@ def main():
     app.add_handler(conv)
 
     # Servidor web mínimo para que Render detecte el servicio activo
-    import threading
-    from http.server import HTTPServer, BaseHTTPRequestHandler
+   # ═══════════════════════════════════════════════════════════════
+# HEALTHCHECK SERVER PARA RENDER + UPTIMEROBOT
+# ═══════════════════════════════════════════════════════════════
 
-    class HealthHandler(BaseHTTPRequestHandler):
-        def do_GET(self):
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
+class HealthHandler(BaseHTTPRequestHandler):
+
+    def do_GET(self):
+
+        if self.path == "/":
             self.send_response(200)
+            self.send_header("Content-type", "application/json")
             self.end_headers()
-            self.wfile.write(b"OK")
-        def log_message(self, format, *args):
-            pass
+            self.wfile.write(
+                b'{"status":"online","service":"chatbot-refugio-latinoamericano"}'
+            )
 
-    port = int(os.getenv("PORT", 8080))
-    server = HTTPServer(("0.0.0.0", port), HealthHandler)
-    thread = threading.Thread(target=server.serve_forever)
-    thread.daemon = True
-    thread.start()
-    logger.info(f"Health server corriendo en puerto {port}")
+        elif self.path == "/health":
+            self.send_response(200)
+            self.send_header("Content-type", "application/json")
+            self.end_headers()
+            self.wfile.write(
+                b'{"status":"ok"}'
+            )
+
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def log_message(self, format, *args):
+        return
+
+port = int(os.getenv("PORT", 8080))
+
+server = HTTPServer(("0.0.0.0", port), HealthHandler)
+
+thread = threading.Thread(target=server.serve_forever)
+thread.daemon = True
+thread.start()
+
+logger.info(f"Health server corriendo en puerto {port}")
 
     logger.info("Chatbot Refugio Latinoamericano v5 — Groq para todo (transcripción + repreguntas + borradores)...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
