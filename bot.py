@@ -19,6 +19,7 @@ import requests
 import time
 import threading
 import urllib.request
+from urllib.parse import urlparse  # ← NUEVO: para manejar rutas con parámetros
 from telegram import Update, ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
@@ -1018,26 +1019,32 @@ def main():
 
     class HealthHandler(BaseHTTPRequestHandler):
         def do_GET(self):
-            if self.path == "/":
+            # Extraer solo la ruta (sin los parámetros ?...)
+            parsed = urlparse(self.path)
+            path = parsed.path
+
+            if path == "/":
                 self.send_response(200)
                 self.send_header("Content-type", "application/json")
                 self.end_headers()
                 self.wfile.write(
                     b'{"status":"online","service":"chatbot-refugio-latinoamericano"}'
                 )
-            elif self.path == "/health":
+            elif path == "/health":
                 self.send_response(200)
                 self.send_header("Content-type", "application/json")
                 self.end_headers()
                 self.wfile.write(
                     b'{"status":"ok"}'
                 )
+                # Para verificar en logs de Render que el ping llega
+                logger.info(f"Health check recibido: {self.path}")
             else:
                 self.send_response(404)
                 self.end_headers()
 
         def log_message(self, format, *args):
-            return  # Silencia los logs de cada request de salud
+            return  # Silencia los logs del servidor HTTP
 
     port = int(os.getenv("PORT", 8080))
     server = HTTPServer(("0.0.0.0", port), HealthHandler)
