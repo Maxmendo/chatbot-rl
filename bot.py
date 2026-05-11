@@ -1,6 +1,6 @@
 """
 CHATBOT REFUGIO LATINOAMERICANO — bot.py v6
-Incorpora: resumen editable antes de generar + /reiniciar
+Incorpora: resumen editable antes de generar + /reiniciar + auto‑keep‑alive
 
 Variables de entorno:
   TELEGRAM_BOT_TOKEN  → token del bot de Telegram
@@ -16,6 +16,9 @@ import base64
 import logging
 import json
 import requests
+import time
+import threading
+import urllib.request
 from telegram import Update, ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
@@ -937,6 +940,33 @@ async def cancelar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 # ═══════════════════════════════════════════════════════════════
+# AUTO‑PING PARA MANTENER EL SERVICIO ACTIVO EN RENDER
+# ═══════════════════════════════════════════════════════════════
+
+def start_self_pinger(port: int, interval_seconds: int = 240):
+    """
+    Lanza un hilo que periódicamente hace una petición GET a /health
+    para mantener activo el servicio en Render (evita el auto-sleep).
+    """
+    def pinger():
+        url = f"http://localhost:{port}/health"
+        while True:
+            try:
+                with urllib.request.urlopen(url, timeout=10) as response:
+                    if response.status == 200:
+                        logger.debug("Self-ping exitoso a /health")
+                    else:
+                        logger.warning(f"Self-ping respuesta inesperada: {response.status}")
+            except Exception as e:
+                logger.error(f"Error en self-ping: {e}")
+            time.sleep(interval_seconds)
+
+    thread = threading.Thread(target=pinger, daemon=True)
+    thread.start()
+    logger.info(f"Auto‑pinger iniciado (cada {interval_seconds}s en puerto {port})")
+
+
+# ═══════════════════════════════════════════════════════════════
 # MAIN
 # ═══════════════════════════════════════════════════════════════
 
@@ -984,13 +1014,10 @@ def main():
     app.add_handler(conv)
 
     # Servidor web mínimo para que Render detecte el servicio activo
-    import threading
     from http.server import HTTPServer, BaseHTTPRequestHandler
 
     class HealthHandler(BaseHTTPRequestHandler):
-
         def do_GET(self):
-
             if self.path == "/":
                 self.send_response(200)
                 self.send_header("Content-type", "application/json")
@@ -998,7 +1025,6 @@ def main():
                 self.wfile.write(
                     b'{"status":"online","service":"chatbot-refugio-latinoamericano"}'
                 )
-
             elif self.path == "/health":
                 self.send_response(200)
                 self.send_header("Content-type", "application/json")
@@ -1006,27 +1032,26 @@ def main():
                 self.wfile.write(
                     b'{"status":"ok"}'
                 )
-
             else:
                 self.send_response(404)
                 self.end_headers()
 
         def log_message(self, format, *args):
-            return
+            return  # Silencia los logs de cada request de salud
 
     port = int(os.getenv("PORT", 8080))
-
     server = HTTPServer(("0.0.0.0", port), HealthHandler)
-
     thread = threading.Thread(target=server.serve_forever)
     thread.daemon = True
     thread.start()
-
     logger.info(f"Health server corriendo en puerto {port}")
 
+    # 🔁 Iniciar auto‑pinger para mantener el servicio despierto
+    start_self_pinger(port, interval_seconds=240)
+
     logger.info(
-        "Chatbot Refugio Latinoamericano v5 — Groq para todo "
-        "(transcripción + repreguntas + borradores)..."
+        "Chatbot Refugio Latinoamericano v6 — Groq para todo "
+        "(transcripción + repreguntas + borradores) + auto‑keep‑alive"
     )
 
     app.run_polling(allowed_updates=Update.ALL_TYPES)
