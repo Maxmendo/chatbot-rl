@@ -825,7 +825,7 @@ async def cancelar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text("Cancelado. /start para comenzar.", reply_markup=ReplyKeyboardRemove())
     return ConversationHandler.END
 
-# ========== AUTO‑PING (opcional pero recomendado) ==========
+# ========== AUTO‑PING ==========
 def start_self_pinger(port: int, interval_seconds: int = 240):
     def pinger():
         url = f"http://localhost:{port}/health"
@@ -843,7 +843,7 @@ def start_self_pinger(port: int, interval_seconds: int = 240):
     thread.start()
     logger.info(f"Auto‑pinger iniciado (cada {interval_seconds}s en puerto {port})")
 
-# ========== CONFIGURACIÓN DE WEBHOOK Y SERVIDOR ==========
+# ========== WEBHOOK Y SERVIDOR ==========
 async def health_check(request: Request) -> JSONResponse:
     return JSONResponse({"status": "ok"})
 
@@ -868,10 +868,8 @@ async def set_webhook():
 
 # ========== PUNTO DE ENTRADA ==========
 if __name__ == "__main__":
-    # Crear la aplicación del bot
     application = Application.builder().token(TOKEN).build()
 
-    # Añadir ConversationHandler y comandos
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start), CommandHandler("reiniciar", reiniciar)],
         states={
@@ -905,7 +903,6 @@ if __name__ == "__main__":
     )
     application.add_handler(conv_handler)
 
-    # Configurar webhook y servidor web
     async def start_app():
         await application.initialize()
         await set_webhook()
@@ -917,8 +914,5 @@ if __name__ == "__main__":
         server = uvicorn.Server(config)
         await server.serve()
 
-    # Iniciar el auto‑pinger (para mantener vivo el servicio)
     start_self_pinger(PORT, interval_seconds=240)
-
-    # Arrancar el servidor web y el bot
     asyncio.run(start_app())
