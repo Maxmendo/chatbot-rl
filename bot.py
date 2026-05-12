@@ -24,8 +24,22 @@ import time
 import threading
 import urllib.request
 
-logging.basicConfig(format="%(asctime)s - %name)s - %levelname)s - %message)s", level=logging.INFO)
+# ========== CONFIGURACIÓN DE LOGGING (CORREGIDO) ==========
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO
+)
 logger = logging.getLogger(__name__)
+
+# ========== VARIABLES DE ENTORNO ==========
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+if not TOKEN:
+    raise ValueError("Falta TELEGRAM_BOT_TOKEN")
+
+RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL")
+if not RENDER_EXTERNAL_URL:
+    logger.error("RENDER_EXTERNAL_URL no configurada. El webhook no funcionará.")
+PORT = int(os.getenv("PORT", 8080))
 
 # ========== ESTADOS DEL CONVERSATIONHANDLER ==========
 (AUTENTICACION, IDENTIFICACION, SELECCION_GENERO, INICIO_FLUJO,
