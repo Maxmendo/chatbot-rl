@@ -1,5 +1,5 @@
 """
-CHATBOT REFUGIO LATINOAMERICANO — Webhook (versión final sin errores)
+CHATBOT REFUGIO LATINOAMERICANO — Webhook (sin polling)
 No genera conflictos 409 en Render.
 """
 
@@ -26,7 +26,7 @@ import urllib.request
 
 # ========== CONFIGURACIÓN DE LOGGING ==========
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    format="%(asctime)s - %name)s - %levelname)s - %message)s",
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
