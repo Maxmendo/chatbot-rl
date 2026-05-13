@@ -1,6 +1,6 @@
 """
 CHATBOT REFUGIO LATINOAMERICANO — Webhook (sin polling)
-Versión con testimonios para reportaje, audios, fotos opcionales y prompt anti-alucinación.
+Versión completa con testimonios para reportaje, fotos separadas, vídeo opcional.
 """
 
 import os
@@ -87,7 +87,7 @@ GENEROS = {
     "reportaje": {
         "nombre": "Reportaje",
         "descripcion": "Análisis profundo de un fenómeno",
-        "fotos_min": 0,
+        "fotos_min": 2,
         "estructura": "reportaje",
     },
 }
@@ -330,7 +330,7 @@ async def transcribir_audio_groq(file_id: str, bot) -> str:
         logger.error(f"Error transcripción: {e}")
         return "[Error al transcribir. Respondé en texto.]"
 
-# ========== GENERACIÓN DEL BORRADOR (versión mejorada) ==========
+# ========== GENERACIÓN DEL BORRADOR ==========
 def generar_borrador(respuestas: dict, nombre: str, genero_key: str, fotos: int,
                      testimonios: list = None, ampliacion: str = "") -> str:
     prompt_sistema = obtener_prompt(genero_key)
@@ -348,7 +348,8 @@ def generar_borrador(respuestas: dict, nombre: str, genero_key: str, fotos: int,
             texto_testimonios += f"Nacionalidad: {t.get('nacionalidad', '')}\n"
             if t.get('edad'):
                 texto_testimonios += f"Edad: {t['edad']}\n"
-            texto_testimonios += f"Relato: {t.get('texto', '')}\n\n"
+            texto_testimonios += f"Pregunta realizada: {t.get('pregunta', '')}\n"
+            texto_testimonios += f"Respuesta/Opinión: {t.get('respuesta', '')}\n\n"
     if ampliacion:
         texto_testimonios += f"\n=== AMPLIACIÓN DEL CORRESPONSAL ===\n{ampliacion}\n"
     
@@ -508,17 +509,6 @@ def extraer_titulo(borrador: str) -> str:
     return "Borrador sin título"
 
 # ========== FUNCIONES AUXILIARES PARA TESTIMONIOS ==========
-def formatear_lista_preguntas(respuestas: dict, flujo: dict) -> str:
-    if not flujo:
-        return "No hay preguntas previas."
-    lineas = []
-    for i, p in enumerate(flujo["preguntas"]):
-        clave = p["clave"]
-        texto_corto = p["texto"].split("\n")[0].replace("*", "").strip()
-        respuesta = respuestas.get(clave, "sin responder aún")
-        lineas.append(f"{i+1}. {texto_corto}\n   → {respuesta[:120]}...")
-    return "\n".join(lineas)
-
 def teclado_testimonio_opciones() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("➕ Agregar otro testimonio (máx 3)", callback_data="testimonio:agregar")],
@@ -531,197 +521,7 @@ def teclado_consentimiento_fotos() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("🚫 No, sin fotos", callback_data="fotos:no")],
     ])
 
-# ========== NUEVOS HANDLERS PARA TESTIMONIOS ==========
-async def iniciar_testimonios(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    context.user_data["testimonios"] = []
-    context.user_data["testimonio_actual"] = {}
-    context.user_data["testimonio_paso"] = "nombre"
-    context.user_data["fotos_testimonios"] = []
-    context.user_data["consentimiento_fotos"] = None
-
-    await update.message.reply_text(
-        "📢 *Testimonios (Reportaje)*\n\n"
-        "Para este género, necesitamos al menos *dos testimonios* de fuentes externas.\n"
-        "Por cada persona que testifica, te pediré:\n"
-        "• Nombre o alias (obligatorio, puede ser ficticio)\n"
-        "• Organización (opcional, escribe '-' si no aplica)\n"
-        "• Nacionalidad (obligatorio)\n"
-        "• Edad (opcional, escribe '-' si no quieres decirla)\n"
-        "• Luego el relato (mínimo 15 caracteres o puedes enviar un audio o archivo de audio de hasta 4 minutos).\n\n"
-        "Empecemos con el *primer testimonio*.\n\n"
-        "✏️ *Nombre o alias:*",
-        parse_mode="Markdown"
-    )
-    return RECOLECTANDO_TESTIMONIOS
-
-async def handle_testimonio_texto(update: Update, context: ContextTypes.DEFAULT_TYPE, texto_alternativo: str = None) -> int:
-    # Manejo de la ampliación opcional
-    if context.user_data.get("esperando_ampliacion"):
-        texto = texto_alternativo if texto_alternativo is not None else update.message.text.strip()
-        if texto == "-" or texto == "":
-            context.user_data["ampliacion_info"] = ""
-        else:
-            context.user_data["ampliacion_info"] = texto
-        context.user_data["esperando_ampliacion"] = False
-        # Después de la ampliación, pasar a generar el borrador
-        return await cmd_generar(update, context)
-    
-    # Lógica normal de recolección de testimonios
-    texto = texto_alternativo if texto_alternativo is not None else update.message.text.strip()
-    paso = context.user_data.get("testimonio_paso", "nombre")
-    actual = context.user_data.get("testimonio_actual", {})
-    genero_key = context.user_data.get("genero")
-    flujo = obtener_flujo(genero_key) if genero_key else None
-
-    if paso == "nombre":
-        if not texto:
-            await update.message.reply_text("Necesito un nombre o alias. Escribí al menos un carácter.")
-            return RECOLECTANDO_TESTIMONIOS
-        actual["nombre"] = texto
-        context.user_data["testimonio_paso"] = "organizacion"
-        await update.message.reply_text(
-            "📌 *Organización o institución* (opcional).\n"
-            "Si no pertenece a ninguna, escribí un guión (-) para continuar.\n\n"
-            "_Escribí la organización:_",
-            parse_mode="Markdown"
-        )
-    elif paso == "organizacion":
-        actual["organizacion"] = texto if texto != "-" else ""
-        context.user_data["testimonio_paso"] = "nacionalidad"
-        await update.message.reply_text("🌎 *Nacionalidad* (obligatorio):", parse_mode="Markdown")
-    elif paso == "nacionalidad":
-        if not texto:
-            await update.message.reply_text("La nacionalidad es obligatoria. Escribí un país.")
-            return RECOLECTANDO_TESTIMONIOS
-        actual["nacionalidad"] = texto
-        context.user_data["testimonio_paso"] = "edad"
-        await update.message.reply_text(
-            "🎂 *Edad* (opcional). Si no quieres decirla, escribí un guión (-).\n"
-            "_Escribí la edad:_",
-            parse_mode="Markdown"
-        )
-    elif paso == "edad":
-        actual["edad"] = texto if texto != "-" else ""
-        context.user_data["testimonio_paso"] = "texto"
-        respuestas = context.user_data.get("respuestas", {})
-        lista = formatear_lista_preguntas(respuestas, flujo) if flujo else "No hay preguntas previas."
-        await update.message.reply_text(
-            f"💬 *Relato / testimonio*\n\n"
-            f"Pedile a la persona que relate su experiencia. Podés tomar como referencia alguna de estas preguntas:\n\n"
-            f"{lista}\n\n"
-            f"_Escribí el testimonio (mínimo 15 caracteres) o enviá un audio o archivo de audio:_",
-            parse_mode="Markdown"
-        )
-    elif paso == "texto":
-        if len(texto) < 15:
-            await update.message.reply_text("El testimonio es muy corto. Por favor, desarrollá un poco más (mínimo 15 caracteres).")
-            return RECOLECTANDO_TESTIMONIOS
-        actual["texto"] = texto
-        testimonios = context.user_data.get("testimonios", [])
-        testimonios.append(actual)
-        context.user_data["testimonios"] = testimonios
-        cant = len(testimonios)
-
-        if cant < 2:
-            context.user_data["testimonio_actual"] = {}
-            context.user_data["testimonio_paso"] = "nombre"
-            await update.message.reply_text(
-                f"✅ Testimonio #{cant} guardado. Necesitamos al menos 2 testimonios.\n\n"
-                "✏️ *Nombre o alias del siguiente testimonio:*",
-                parse_mode="Markdown"
-            )
-            return RECOLECTANDO_TESTIMONIOS
-        elif cant == 2:
-            await update.message.reply_text(
-                f"✅ Testimonio #{cant} guardado. Ya tienes los 2 testimonios mínimos.\n\n"
-                "¿Deseas agregar un testimonio más? (máximo 3)",
-                reply_markup=teclado_testimonio_opciones()
-            )
-            return RECOLECTANDO_TESTIMONIOS
-        elif cant == 3:
-            await update.message.reply_text(
-                f"✅ Testimonio #{cant} guardado. Has alcanzado el máximo de 3 testimonios.\n\n"
-                "Ahora, ¿las personas que testimoniaron dieron su consentimiento para ser fotografiadas?",
-                reply_markup=teclado_consentimiento_fotos()
-            )
-            return RECOLECTANDO_TESTIMONIOS
-    return RECOLECTANDO_TESTIMONIOS
-
-async def handle_testimonio_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Maneja los audios (notas de voz o archivos de audio) para el relato del testimonio."""
-    paso = context.user_data.get("testimonio_paso", "")
-    if paso != "texto":
-        await update.message.reply_text("⏳ En este momento no se espera un audio. Por favor, respondé las preguntas actuales con texto.")
-        return RECOLECTANDO_TESTIMONIOS
-    
-    # Determinar si es nota de voz o archivo de audio
-    voice = update.message.voice
-    audio = update.message.audio
-    if voice:
-        file_id = voice.file_id
-        duration = voice.duration
-    elif audio:
-        file_id = audio.file_id
-        duration = audio.duration
-    else:
-        await update.message.reply_text("No se detectó un audio válido. Enviá una nota de voz o un archivo de audio (MP3, M4A, OGG).")
-        return RECOLECTANDO_TESTIMONIOS
-    
-    # Verificar duración (máximo 4 minutos = 240 segundos)
-    if duration and duration > 240:
-        await update.message.reply_text("⏱️ El audio es demasiado largo (máximo 4 minutos). Por favor, enviá uno más corto o escribí el testimonio directamente.")
-        return RECOLECTANDO_TESTIMONIOS
-    
-    await update.message.reply_text("🎙️ _Transcribiendo audio..._", parse_mode="Markdown")
-    texto_transcrito = await transcribir_audio_groq(file_id, context.bot)
-    await update.message.reply_text(f"📝 *Transcripción:*\n_{texto_transcrito}_", parse_mode="Markdown")
-    
-    return await handle_testimonio_texto(update, context, texto_transcrito)
-
-async def handle_testimonio_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    await query.answer()
-    data = query.data
-
-    if data == "testimonio:agregar":
-        context.user_data["testimonio_actual"] = {}
-        context.user_data["testimonio_paso"] = "nombre"
-        await query.message.reply_text(
-            "✏️ *Nombre o alias del tercer testimonio:*",
-            parse_mode="Markdown"
-        )
-        return RECOLECTANDO_TESTIMONIOS
-    elif data == "testimonio:finalizar":
-        await query.message.reply_text(
-            "Ahora, ¿las personas que testimoniaron dieron su consentimiento para ser fotografiadas?",
-            reply_markup=teclado_consentimiento_fotos()
-        )
-        return RECOLECTANDO_TESTIMONIOS
-    elif data == "fotos:si":
-        context.user_data["consentimiento_fotos"] = True
-        num_testimonios = len(context.user_data.get("testimonios", []))
-        await query.message.reply_text(
-            f"📸 *Fotos de los testimonios*\n\n"
-            f"Por favor, enviame una foto de cada una de las {num_testimonios} personas que brindaron testimonio.\n"
-            f"Envía una foto por mensaje. Cuando hayas enviado todas, escribe /listo.\n\n"
-            f"_Si alguna persona no quiere ser fotografiada, simplemente no envíes su foto._",
-            parse_mode="Markdown"
-        )
-        context.user_data["esperando_fotos_testimonios"] = True
-        return ESPERANDO_FOTOS
-    elif data == "fotos:no":
-        context.user_data["consentimiento_fotos"] = False
-        await query.message.reply_text(
-            "📝 *Información adicional*\n\n"
-            "¿Hay algún dato o contexto relevante que quieras agregar al reportaje?\n"
-            "Podés escribirlo ahora, o enviar '-' para saltar.",
-            parse_mode="Markdown"
-        )
-        context.user_data["esperando_ampliacion"] = True
-        return RECOLECTANDO_TESTIMONIOS
-    return RECOLECTANDO_TESTIMONIOS
-    
-    # ========== HANDLERS PRINCIPALES (originales, con modificaciones) ==========
+# ========== HANDLERS DEL FLUJO ==========
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.clear()
     await update.message.reply_text(
@@ -893,6 +693,192 @@ async def procesar_respuesta(update, context, texto_respuesta: str) -> int:
         else:
             return await mostrar_resumen(update.message, context)
 
+async def iniciar_testimonios(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    context.user_data["testimonios"] = []
+    context.user_data["testimonio_actual"] = {}
+    context.user_data["testimonio_paso"] = "nombre"
+    context.user_data["fotos_testimonios"] = []
+    context.user_data["consentimiento_fotos"] = None
+
+    await update.message.reply_text(
+        "📢 *Testimonios (Reportaje)*\n\n"
+        "Para este género, necesitamos al menos *dos testimonios* de fuentes externas.\n"
+        "Por cada persona que testifica, te pediré:\n"
+        "• Nombre o alias (obligatorio, puede ser ficticio)\n"
+        "• Organización (opcional, escribe '-' si no aplica)\n"
+        "• Nacionalidad (obligatorio)\n"
+        "• Edad (opcional, escribe '-' si no quieres decirla)\n"
+        "• Luego, la *pregunta que formulaste* (libre, según el contexto)\n"
+        "• Y finalmente su *respuesta u opinión* (puedes escribir o enviar un audio de hasta 4 minutos).\n\n"
+        "Empecemos con el *primer testimonio*.\n\n"
+        "✏️ *Nombre o alias:*",
+        parse_mode="Markdown"
+    )
+    return RECOLECTANDO_TESTIMONIOS
+
+async def handle_testimonio_texto(update: Update, context: ContextTypes.DEFAULT_TYPE, texto_alternativo: str = None) -> int:
+    texto = texto_alternativo if texto_alternativo is not None else update.message.text.strip()
+    paso = context.user_data.get("testimonio_paso", "nombre")
+    actual = context.user_data.get("testimonio_actual", {})
+
+    if paso == "nombre":
+        if not texto:
+            await update.message.reply_text("Necesito un nombre o alias.")
+            return RECOLECTANDO_TESTIMONIOS
+        actual["nombre"] = texto
+        context.user_data["testimonio_paso"] = "organizacion"
+        await update.message.reply_text(
+            "📌 *Organización* (opcional): si no pertenece a ninguna, enviá '-'.",
+            parse_mode="Markdown"
+        )
+    elif paso == "organizacion":
+        actual["organizacion"] = texto if texto != "-" else ""
+        context.user_data["testimonio_paso"] = "nacionalidad"
+        await update.message.reply_text("🌎 *Nacionalidad* (obligatorio):", parse_mode="Markdown")
+    elif paso == "nacionalidad":
+        if not texto:
+            await update.message.reply_text("La nacionalidad es obligatoria.")
+            return RECOLECTANDO_TESTIMONIOS
+        actual["nacionalidad"] = texto
+        context.user_data["testimonio_paso"] = "edad"
+        await update.message.reply_text(
+            "🎂 *Edad* (opcional): si no quieres decirla, enviá '-'.",
+            parse_mode="Markdown"
+        )
+    elif paso == "edad":
+        actual["edad"] = texto if texto != "-" else ""
+        context.user_data["testimonio_paso"] = "pregunta"
+        await update.message.reply_text(
+            "❓ *Pregunta que le hiciste*\n\n"
+            "Formulá cualquier pregunta que ayude a entender el contexto del reportaje.\n"
+            "_Escribí la pregunta:_",
+            parse_mode="Markdown"
+        )
+    elif paso == "pregunta":
+        if len(texto) < 3:
+            await update.message.reply_text("La pregunta es muy corta. Escribí una pregunta más clara.")
+            return RECOLECTANDO_TESTIMONIOS
+        actual["pregunta"] = texto
+        context.user_data["testimonio_paso"] = "respuesta"
+        await update.message.reply_text(
+            "💬 *Respuesta u opinión*\n\n"
+            "Ahora, escribí o enviá un audio con la respuesta de la persona (mínimo 15 caracteres si es texto, máximo 4 minutos si es audio).",
+            parse_mode="Markdown"
+        )
+    elif paso == "respuesta":
+        if len(texto) < 15:
+            await update.message.reply_text("La respuesta es muy corta. Desarrollá un poco más o enviá un audio.")
+            return RECOLECTANDO_TESTIMONIOS
+        actual["respuesta"] = texto
+        testimonios = context.user_data.get("testimonios", [])
+        testimonio = {
+            "nombre": actual.get("nombre"),
+            "organizacion": actual.get("organizacion", ""),
+            "nacionalidad": actual.get("nacionalidad"),
+            "edad": actual.get("edad", ""),
+            "pregunta": actual.get("pregunta"),
+            "respuesta": actual.get("respuesta"),
+        }
+        testimonios.append(testimonio)
+        context.user_data["testimonios"] = testimonios
+        cant = len(testimonios)
+
+        if cant < 2:
+            context.user_data["testimonio_actual"] = {}
+            context.user_data["testimonio_paso"] = "nombre"
+            await update.message.reply_text(
+                f"✅ Testimonio #{cant} guardado. Necesitamos al menos 2 testimonios.\n\n"
+                "✏️ *Nombre o alias del siguiente testimonio:*",
+                parse_mode="Markdown"
+            )
+            return RECOLECTANDO_TESTIMONIOS
+        elif cant == 2:
+            await update.message.reply_text(
+                f"✅ Testimonio #{cant} guardado. Ya tienes los 2 testimonios mínimos.\n\n"
+                "¿Deseas agregar un testimonio más? (máximo 3)",
+                reply_markup=teclado_testimonio_opciones()
+            )
+            return RECOLECTANDO_TESTIMONIOS
+        elif cant == 3:
+            await update.message.reply_text(
+                f"✅ Testimonio #{cant} guardado. Has alcanzado el máximo.\n\n"
+                "Ahora, ¿las personas que testimoniaron dieron su consentimiento para ser fotografiadas?",
+                reply_markup=teclado_consentimiento_fotos()
+            )
+            return RECOLECTANDO_TESTIMONIOS
+    return RECOLECTANDO_TESTIMONIOS
+
+async def handle_testimonio_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    paso = context.user_data.get("testimonio_paso", "")
+    if paso != "respuesta":
+        await update.message.reply_text("⏳ En este momento no se espera un audio. Respondé con texto.")
+        return RECOLECTANDO_TESTIMONIOS
+
+    voice = update.message.voice
+    audio = update.message.audio
+    if voice:
+        file_id = voice.file_id
+        duration = voice.duration
+    elif audio:
+        file_id = audio.file_id
+        duration = audio.duration
+    else:
+        await update.message.reply_text("No se detectó un audio válido.")
+        return RECOLECTANDO_TESTIMONIOS
+
+    if duration and duration > 240:
+        await update.message.reply_text("⏱️ El audio es demasiado largo (máx 4 minutos). Enviá uno más corto o escribí la respuesta.")
+        return RECOLECTANDO_TESTIMONIOS
+
+    await update.message.reply_text("🎙️ _Transcribiendo audio..._", parse_mode="Markdown")
+    texto = await transcribir_audio_groq(file_id, context.bot)
+    await update.message.reply_text(f"📝 *Transcripción:*\n_{texto}_", parse_mode="Markdown")
+    return await handle_testimonio_texto(update, context, texto)
+
+async def handle_testimonio_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+
+    if data == "testimonio:agregar":
+        context.user_data["testimonio_actual"] = {}
+        context.user_data["testimonio_paso"] = "nombre"
+        await query.message.reply_text(
+            "✏️ *Nombre o alias del tercer testimonio:*",
+            parse_mode="Markdown"
+        )
+        return RECOLECTANDO_TESTIMONIOS
+    elif data == "testimonio:finalizar":
+        await query.message.reply_text(
+            "Ahora, ¿las personas que testimoniaron dieron su consentimiento para ser fotografiadas?",
+            reply_markup=teclado_consentimiento_fotos()
+        )
+        return RECOLECTANDO_TESTIMONIOS
+    elif data == "fotos:si":
+        context.user_data["consentimiento_fotos"] = True
+        num_testimonios = len(context.user_data.get("testimonios", []))
+        await query.message.reply_text(
+            f"📸 *Fotos de los testimonios*\n\n"
+            f"Por favor, enviame una foto de cada una de las {num_testimonios} personas que brindaron testimonio.\n"
+            f"Envía una foto por mensaje. Cuando hayas enviado todas, escribe /listo.\n\n"
+            f"_Si alguna persona no quiere ser fotografiada, simplemente no envíes su foto._",
+            parse_mode="Markdown"
+        )
+        context.user_data["esperando_fotos_testimonios"] = True
+        return ESPERANDO_FOTOS
+    elif data == "fotos:no":
+        context.user_data["consentimiento_fotos"] = False
+        await query.message.reply_text("✅ No se adjuntarán fotos de los testimonios.")
+        await query.message.reply_text(
+            "📝 *Información adicional*\n\n"
+            "¿Hay algún dato o contexto relevante que quieras agregar al reportaje?\n"
+            "Podés escribirlo ahora, o enviar '-' para saltar.",
+            parse_mode="Markdown"
+        )
+        context.user_data["esperando_ampliacion"] = True
+        return RECOLECTANDO_TESTIMONIOS
+    return RECOLECTANDO_TESTIMONIOS
+
 async def mostrar_resumen(message, context) -> int:
     genero_key = context.user_data["genero"]
     flujo = obtener_flujo(genero_key)
@@ -920,6 +906,7 @@ async def handle_revision_resumen(update: Update, context: ContextTypes.DEFAULT_
             f"Cuando termines, escribí */generar*",
             parse_mode="Markdown"
         )
+        context.user_data["esperando_fotos_testimonios"] = False  # asegurar
         return ESPERANDO_FOTOS
     elif accion == "editar":
         genero_key = context.user_data["genero"]
@@ -993,7 +980,7 @@ async def handle_foto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         if recibidas < necesarias:
             await update.message.reply_text(f"📸 Foto {recibidas} de {necesarias} recibida. Enviá la siguiente foto (o /listo si ya están todas).")
         else:
-            await update.message.reply_text(f"✅ Recibidas las {necesarias} fotos. Ahora, ¿alguna información adicional?")
+            await update.message.reply_text(f"✅ Recibidas las {necesarias} fotos de testimonios.")
             await update.message.reply_text(
                 "📝 *Información adicional*\n\n"
                 "¿Hay algún dato o contexto relevante que quieras agregar al reportaje?\n"
@@ -1047,52 +1034,43 @@ async def cmd_generar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         await update.message.reply_text("⚠️ No hay género seleccionado.")
         return ConversationHandler.END
 
+    # Validar fotos del hecho (obligatorias para todos)
+    fotos_hecho_ids = context.user_data.get("foto_ids", [])
+    fotos_min = GENEROS[genero_key]["fotos_min"]
+    if len(fotos_hecho_ids) < fotos_min:
+        await update.message.reply_text(f"⚠️ Necesitás *al menos {fotos_min} foto{'s' if fotos_min > 1 else ''}* del hecho antes de generar.", parse_mode="Markdown")
+        return ESPERANDO_FOTOS
+
+    # Descargar fotos del hecho
+    fotos_hecho_bytes = await descargar_fotos(fotos_hecho_ids, context.bot)
+
+    # Para reportaje, además hay testimonios y fotos de testimonios (opcionales)
     if genero_key == "reportaje":
         testimonios = context.user_data.get("testimonios", [])
         if len(testimonios) < 2:
             await update.message.reply_text("⚠️ Aún no has completado los testimonios mínimos (2). Vuelve al flujo anterior.")
             return ConversationHandler.END
-        fotos_ids = context.user_data.get("fotos_testimonios", [])
-        fotos_bytes = await descargar_fotos(fotos_ids, context.bot) if fotos_ids else []
+        fotos_test_ids = context.user_data.get("fotos_testimonios", [])
+        fotos_test_bytes = await descargar_fotos(fotos_test_ids, context.bot) if fotos_test_ids else []
+        todas_fotos = fotos_hecho_bytes + fotos_test_bytes
         ampliacion = context.user_data.get("ampliacion_info", "")
-        if context.user_data.get("esperando_ampliacion"):
-            await update.message.reply_text("Primero respondé la pregunta de ampliación (o enviá '-').")
-            return RECOLECTANDO_TESTIMONIOS
-        await update.message.reply_text("⏳ *Generando borrador...*", parse_mode="Markdown")
-        nombre = context.user_data.get("nombre", "corresponsal")
-        genero_nombre = GENEROS[genero_key]["nombre"]
-        borrador = generar_borrador(
-            context.user_data.get("respuestas", {}),
-            nombre,
-            genero_key,
-            len(fotos_bytes),
-            testimonios=testimonios,
-            ampliacion=ampliacion
-        )
-        titulo = extraer_titulo(borrador)
     else:
-        fotos_min = GENEROS[genero_key]["fotos_min"]
-        fotos = context.user_data.get("fotos", 0)
-        if fotos < fotos_min:
-            await update.message.reply_text(
-                f"⚠️ Necesitás *al menos {fotos_min} foto{'s' if fotos_min > 1 else ''}* antes de generar.\n"
-                f"_Enviaste {fotos} hasta ahora._",
-                parse_mode="Markdown")
-            return ESPERANDO_FOTOS
-        await update.message.reply_text("⏳ *Generando borrador...*", parse_mode="Markdown")
-        nombre = context.user_data.get("nombre", "corresponsal")
-        genero_nombre = GENEROS[genero_key]["nombre"]
-        fotos_ids = context.user_data.get("foto_ids", [])
-        fotos_bytes = await descargar_fotos(fotos_ids, context.bot)
-        borrador = generar_borrador(
-            context.user_data.get("respuestas", {}),
-            nombre,
-            genero_key,
-            len(fotos_bytes),
-            testimonios=None,
-            ampliacion=""
-        )
-        titulo = extraer_titulo(borrador)
+        testimonios = None
+        todas_fotos = fotos_hecho_bytes
+        ampliacion = ""
+
+    await update.message.reply_text("⏳ *Generando borrador...*", parse_mode="Markdown")
+    nombre = context.user_data.get("nombre", "corresponsal")
+    genero_nombre = GENEROS[genero_key]["nombre"]
+    borrador = generar_borrador(
+        context.user_data.get("respuestas", {}),
+        nombre,
+        genero_key,
+        len(todas_fotos),
+        testimonios=testimonios,
+        ampliacion=ampliacion
+    )
+    titulo = extraer_titulo(borrador)
 
     for i in range(0, len(borrador), 4000):
         await update.message.reply_text(borrador[i:i+4000])
@@ -1100,12 +1078,13 @@ async def cmd_generar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     await update.message.reply_text("📧 _Enviando al equipo editorial..._", parse_mode="Markdown")
     video_bytes = None
     video_id = context.user_data.get("video_id")
-    if video_id and genero_key != "reportaje":
-        await update.message.reply_text("🎥 _Descargando video..._", parse_mode="Markdown")
+    if video_id:
+        await update.message.reply_text("🎥 *Descargando video...*", parse_mode="Markdown")
         video_bytes = await descargar_video(video_id, context.bot)
-    enviado = enviar_con_resend(borrador, nombre, titulo, genero_nombre, fotos_bytes, video_bytes)
+
+    enviado = enviar_con_resend(borrador, nombre, titulo, genero_nombre, todas_fotos, video_bytes)
     if enviado:
-        info = f"📎 Fotos: {len(fotos_bytes)}"
+        info = f"📎 Fotos: {len(todas_fotos)}"
         if video_bytes:
             info += f"\n🎥 Video: {context.user_data.get('video_duracion', 0)}s"
         await update.message.reply_text(
