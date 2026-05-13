@@ -865,20 +865,24 @@ async def handle_testimonio_callback(update: Update, context: ContextTypes.DEFAU
             parse_mode="Markdown"
         )
         context.user_data["esperando_fotos_testimonios"] = True
+        # Limpiar variables residuales del testimonio
+        context.user_data.pop("testimonio_paso", None)
+        context.user_data.pop("testimonio_actual", None)
         return ESPERANDO_FOTOS
     elif data == "fotos:no":
         context.user_data["consentimiento_fotos"] = False
-        await query.message.reply_text("✅ No se adjuntarán fotos de los testimonios.")
+        # Limpiar variables residuales del testimonio
+        context.user_data.pop("testimonio_paso", None)
+        context.user_data.pop("testimonio_actual", None)
+        context.user_data["esperando_ampliacion"] = True
         await query.message.reply_text(
             "📝 *Información adicional*\n\n"
             "¿Hay algún dato o contexto relevante que quieras agregar al reportaje?\n"
             "Podés escribirlo ahora, o enviar '-' para saltar.",
             parse_mode="Markdown"
         )
-        context.user_data["esperando_ampliacion"] = True
         return RECOLECTANDO_TESTIMONIOS
     return RECOLECTANDO_TESTIMONIOS
-
 async def mostrar_resumen(message, context) -> int:
     genero_key = context.user_data["genero"]
     flujo = obtener_flujo(genero_key)
