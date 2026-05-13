@@ -1,6 +1,6 @@
 """
 CHATBOT REFUGIO LATINOAMERICANO — Webhook (sin polling)
-Versión con testimonios para reportaje, fotos opcionales, y prompt anti-alucinación.
+Versión con testimonios para reportaje, audios, fotos opcionales y prompt anti-alucinación.
 """
 
 import os
@@ -24,7 +24,7 @@ import time
 import threading
 import urllib.request
 
-# ========== CONFIGURACIÓN DE LOGGING (corregido) ==========
+# ========== CONFIGURACIÓN DE LOGGING ==========
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
@@ -547,15 +547,15 @@ async def iniciar_testimonios(update: Update, context: ContextTypes.DEFAULT_TYPE
         "• Organización (opcional, escribe '-' si no aplica)\n"
         "• Nacionalidad (obligatorio)\n"
         "• Edad (opcional, escribe '-' si no quieres decirla)\n"
-        "• Luego el relato (mínimo 15 caracteres).\n\n"
+        "• Luego el relato (mínimo 15 caracteres o puedes enviar un audio o archivo de audio de hasta 4 minutos).\n\n"
         "Empecemos con el *primer testimonio*.\n\n"
         "✏️ *Nombre o alias:*",
         parse_mode="Markdown"
     )
     return RECOLECTANDO_TESTIMONIOS
 
-async def handle_testimonio_texto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    texto = update.message.text.strip()
+async def handle_testimonio_texto(update: Update, context: ContextTypes.DEFAULT_TYPE, texto_alternativo: str = None) -> int:
+    texto = texto_alternativo if texto_alternativo is not None else update.message.text.strip()
     paso = context.user_data.get("testimonio_paso", "nombre")
     actual = context.user_data.get("testimonio_actual", {})
     genero_key = context.user_data.get("genero")
@@ -597,12 +597,12 @@ async def handle_testimonio_texto(update: Update, context: ContextTypes.DEFAULT_
             f"💬 *Relato / testimonio*\n\n"
             f"Pedile a la persona que relate su experiencia. Podés tomar como referencia alguna de estas preguntas:\n\n"
             f"{lista}\n\n"
-            f"_Escribí el testimonio (mínimo 15 caracteres):_",
+            f"_Escribí el testimonio (mínimo 15 caracteres) o enviá un audio o archivo de audio:_",
             parse_mode="Markdown"
         )
     elif paso == "texto":
         if len(texto) < 15:
-            await update.message.reply_text("El testimonio es muy corto. Por favor, desarrollá un poco más.")
+            await update.message.reply_text("El testimonio es muy corto. Por favor, desarrollá un poco más (mínimo 15 caracteres).")
             return RECOLECTANDO_TESTIMONIOS
         actual["texto"] = texto
         testimonios = context.user_data.get("testimonios", [])
@@ -634,6 +634,37 @@ async def handle_testimonio_texto(update: Update, context: ContextTypes.DEFAULT_
             )
             return RECOLECTANDO_TESTIMONIOS
     return RECOLECTANDO_TESTIMONIOS
+
+async def handle_testimonio_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Maneja los audios (notas de voz o archivos de audio) para el relato del testimonio."""
+    paso = context.user_data.get("testimonio_paso", "")
+    if paso != "texto":
+        await update.message.reply_text("⏳ En este momento no se espera un audio. Por favor, respondé las preguntas actuales con texto.")
+        return RECOLECTANDO_TESTIMONIOS
+    
+    # Determinar si es nota de voz o archivo de audio
+    voice = update.message.voice
+    audio = update.message.audio
+    if voice:
+        file_id = voice.file_id
+        duration = voice.duration
+    elif audio:
+        file_id = audio.file_id
+        duration = audio.duration
+    else:
+        await update.message.reply_text("No se detectó un audio válido. Enviá una nota de voz o un archivo de audio (MP3, M4A, OGG).")
+        return RECOLECTANDO_TESTIMONIOS
+    
+    # Verificar duración (máximo 4 minutos = 240 segundos)
+    if duration and duration > 240:
+        await update.message.reply_text("⏱️ El audio es demasiado largo (máximo 4 minutos). Por favor, enviá uno más corto o escribí el testimonio directamente.")
+        return RECOLECTANDO_TESTIMONIOS
+    
+    await update.message.reply_text("🎙️ _Transcribiendo audio..._", parse_mode="Markdown")
+    texto_transcrito = await transcribir_audio_groq(file_id, context.bot)
+    await update.message.reply_text(f"📝 *Transcripción:*\n_{texto_transcrito}_", parse_mode="Markdown")
+    
+    return await handle_testimonio_texto(update, context, texto_transcrito)
 
 async def handle_testimonio_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
@@ -677,6 +708,7 @@ async def handle_testimonio_callback(update: Update, context: ContextTypes.DEFAU
         context.user_data["esperando_ampliacion"] = True
         return RECOLECTANDO_TESTIMONIOS
     return RECOLECTANDO_TESTIMONIOS
+    
     # ========== HANDLERS PRINCIPALES (originales, con modificaciones) ==========
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.clear()
@@ -1153,6 +1185,7 @@ if __name__ == "__main__":
             ],
             RECOLECTANDO_TESTIMONIOS: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_testimonio_texto),
+                MessageHandler(filters.VOICE | filters.AUDIO, handle_testimonio_audio),
                 CallbackQueryHandler(handle_testimonio_callback, pattern=r"^(testimonio:|fotos:)"),
             ],
         },
