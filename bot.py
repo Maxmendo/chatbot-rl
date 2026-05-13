@@ -1,6 +1,6 @@
 """
 CHATBOT REFUGIO LATINOAMERICANO — Webhook (sin polling)
-Versión completa con testimonios para reportaje, fotos separadas, vídeo opcional.
+Versión completa: reportaje con testimonios, dos preguntas (audio/texto), fotos separadas, video opcional.
 """
 
 import os
@@ -348,17 +348,18 @@ def generar_borrador(respuestas: dict, nombre: str, genero_key: str, fotos: int,
             texto_testimonios += f"Nacionalidad: {t.get('nacionalidad', '')}\n"
             if t.get('edad'):
                 texto_testimonios += f"Edad: {t['edad']}\n"
-            texto_testimonios += f"Pregunta realizada: {t.get('pregunta', '')}\n"
-            texto_testimonios += f"Respuesta/Opinión: {t.get('respuesta', '')}\n\n"
+            texto_testimonios += f"Pregunta 1 (obligatoria): {t.get('pregunta1', '')}\n"
+            if t.get('pregunta2'):
+                texto_testimonios += f"Pregunta 2 (opcional): {t.get('pregunta2', '')}\n"
+            texto_testimonios += f"Respuesta: {t.get('respuesta', '')}\n\n"
     if ampliacion:
         texto_testimonios += f"\n=== AMPLIACIÓN DEL CORRESPONSAL ===\n{ampliacion}\n"
     
     instruccion_estricta = (
         "\n\nINSTRUCCIÓN ABSOLUTAMENTE OBLIGATORIA: "
         "Debes redactar la nota periodística utilizando ÚNICA Y EXCLUSIVAMENTE la información proporcionada en este mensaje. "
-        "NO inventes datos, nombres, testimonios, fechas, lugares ni estadísticas que no aparezcan explícitamente en el reporte del corresponsal o en los testimonios. "
-        "Si falta algún dato, simplemente omítelo o indica que no fue proporcionado. "
-        "NO uses tu conocimiento previo. Los testimonios deben ser literalmente extraídos de la sección TESTIMONIOS RECOLECTADOS. "
+        "NO inventes datos, nombres, testimonios, fechas, lugares ni estadísticas que no aparezcan explícitamente. "
+        "Si falta algún dato, omítelo. No uses conocimiento previo. Los testimonios deben ser extraídos literalmente. "
         "La nota debe ser objetiva y respetar el manual de estilo de Refugio Latinoamericano."
     )
     
@@ -704,12 +705,13 @@ async def iniciar_testimonios(update: Update, context: ContextTypes.DEFAULT_TYPE
         "📢 *Testimonios (Reportaje)*\n\n"
         "Para este género, necesitamos al menos *dos testimonios* de fuentes externas.\n"
         "Por cada persona que testifica, te pediré:\n"
-        "• Nombre o alias (obligatorio, puede ser ficticio)\n"
+        "• Nombre o alias (obligatorio)\n"
         "• Organización (opcional, escribe '-' si no aplica)\n"
         "• Nacionalidad (obligatorio)\n"
         "• Edad (opcional, escribe '-' si no quieres decirla)\n"
-        "• Luego, la *pregunta que formulaste* (libre, según el contexto)\n"
-        "• Y finalmente su *respuesta u opinión* (puedes escribir o enviar un audio de hasta 4 minutos).\n\n"
+        "• Luego, la *primera pregunta* (obligatoria) que le hiciste. Podés escribirla o enviar un audio.\n"
+        "• Opcionalmente una *segunda pregunta* (podés saltar con '-'). También puedes usar audio.\n"
+        "• Finalmente su *respuesta u opinión* (texto o audio, mínimo 15 caracteres si es texto).\n\n"
         "Empecemos con el *primer testimonio*.\n\n"
         "✏️ *Nombre o alias:*",
         parse_mode="Markdown"
@@ -717,6 +719,16 @@ async def iniciar_testimonios(update: Update, context: ContextTypes.DEFAULT_TYPE
     return RECOLECTANDO_TESTIMONIOS
 
 async def handle_testimonio_texto(update: Update, context: ContextTypes.DEFAULT_TYPE, texto_alternativo: str = None) -> int:
+    # Manejo de ampliación (después de testimonios)
+    if context.user_data.get("esperando_ampliacion"):
+        texto = texto_alternativo if texto_alternativo is not None else update.message.text.strip()
+        if texto == "-" or texto == "":
+            context.user_data["ampliacion_info"] = ""
+        else:
+            context.user_data["ampliacion_info"] = texto
+        context.user_data["esperando_ampliacion"] = False
+        return await mostrar_resumen(update.message, context)
+
     texto = texto_alternativo if texto_alternativo is not None else update.message.text.strip()
     paso = context.user_data.get("testimonio_paso", "nombre")
     actual = context.user_data.get("testimonio_actual", {})
@@ -747,18 +759,30 @@ async def handle_testimonio_texto(update: Update, context: ContextTypes.DEFAULT_
         )
     elif paso == "edad":
         actual["edad"] = texto if texto != "-" else ""
-        context.user_data["testimonio_paso"] = "pregunta"
+        context.user_data["testimonio_paso"] = "pregunta1"
         await update.message.reply_text(
-            "❓ *Pregunta que le hiciste*\n\n"
-            "Formulá cualquier pregunta que ayude a entender el contexto del reportaje.\n"
-            "_Escribí la pregunta:_",
+            "❓ *Primera pregunta (obligatoria)*\n\n"
+            "Formulá la pregunta principal que le hiciste a la persona. Podés escribirla o enviar un audio.\n"
+            "_Escribí la pregunta o enviá un audio:_",
             parse_mode="Markdown"
         )
-    elif paso == "pregunta":
+    elif paso == "pregunta1":
         if len(texto) < 3:
             await update.message.reply_text("La pregunta es muy corta. Escribí una pregunta más clara.")
             return RECOLECTANDO_TESTIMONIOS
-        actual["pregunta"] = texto
+        actual["pregunta1"] = texto
+        context.user_data["testimonio_paso"] = "pregunta2"
+        await update.message.reply_text(
+            "❔ *Segunda pregunta (opcional)*\n\n"
+            "Si deseas hacer una pregunta adicional, escribila ahora. Si no, enviá '-' para continuar.\n"
+            "_Podés usar audio también._",
+            parse_mode="Markdown"
+        )
+    elif paso == "pregunta2":
+        if texto != "-":
+            actual["pregunta2"] = texto
+        else:
+            actual["pregunta2"] = ""
         context.user_data["testimonio_paso"] = "respuesta"
         await update.message.reply_text(
             "💬 *Respuesta u opinión*\n\n"
@@ -770,13 +794,15 @@ async def handle_testimonio_texto(update: Update, context: ContextTypes.DEFAULT_
             await update.message.reply_text("La respuesta es muy corta. Desarrollá un poco más o enviá un audio.")
             return RECOLECTANDO_TESTIMONIOS
         actual["respuesta"] = texto
+        # Guardar testimonio completo
         testimonios = context.user_data.get("testimonios", [])
         testimonio = {
             "nombre": actual.get("nombre"),
             "organizacion": actual.get("organizacion", ""),
             "nacionalidad": actual.get("nacionalidad"),
             "edad": actual.get("edad", ""),
-            "pregunta": actual.get("pregunta"),
+            "pregunta1": actual.get("pregunta1"),
+            "pregunta2": actual.get("pregunta2", ""),
             "respuesta": actual.get("respuesta"),
         }
         testimonios.append(testimonio)
@@ -810,7 +836,7 @@ async def handle_testimonio_texto(update: Update, context: ContextTypes.DEFAULT_
 
 async def handle_testimonio_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     paso = context.user_data.get("testimonio_paso", "")
-    if paso != "respuesta":
+    if paso not in ["pregunta1", "pregunta2", "respuesta"]:
         await update.message.reply_text("⏳ En este momento no se espera un audio. Respondé con texto.")
         return RECOLECTANDO_TESTIMONIOS
 
@@ -865,13 +891,12 @@ async def handle_testimonio_callback(update: Update, context: ContextTypes.DEFAU
             parse_mode="Markdown"
         )
         context.user_data["esperando_fotos_testimonios"] = True
-        # Limpiar variables residuales del testimonio
+        # Limpiar variables residuales
         context.user_data.pop("testimonio_paso", None)
         context.user_data.pop("testimonio_actual", None)
         return ESPERANDO_FOTOS
     elif data == "fotos:no":
         context.user_data["consentimiento_fotos"] = False
-        # Limpiar variables residuales del testimonio
         context.user_data.pop("testimonio_paso", None)
         context.user_data.pop("testimonio_actual", None)
         context.user_data["esperando_ampliacion"] = True
@@ -883,6 +908,7 @@ async def handle_testimonio_callback(update: Update, context: ContextTypes.DEFAU
         )
         return RECOLECTANDO_TESTIMONIOS
     return RECOLECTANDO_TESTIMONIOS
+
 async def mostrar_resumen(message, context) -> int:
     genero_key = context.user_data["genero"]
     flujo = obtener_flujo(genero_key)
@@ -910,7 +936,7 @@ async def handle_revision_resumen(update: Update, context: ContextTypes.DEFAULT_
             f"Cuando termines, escribí */generar*",
             parse_mode="Markdown"
         )
-        context.user_data["esperando_fotos_testimonios"] = False  # asegurar
+        context.user_data["esperando_fotos_testimonios"] = False
         return ESPERANDO_FOTOS
     elif accion == "editar":
         genero_key = context.user_data["genero"]
@@ -1038,17 +1064,15 @@ async def cmd_generar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         await update.message.reply_text("⚠️ No hay género seleccionado.")
         return ConversationHandler.END
 
-    # Validar fotos del hecho (obligatorias para todos)
+    # Validar fotos del hecho
     fotos_hecho_ids = context.user_data.get("foto_ids", [])
     fotos_min = GENEROS[genero_key]["fotos_min"]
     if len(fotos_hecho_ids) < fotos_min:
         await update.message.reply_text(f"⚠️ Necesitás *al menos {fotos_min} foto{'s' if fotos_min > 1 else ''}* del hecho antes de generar.", parse_mode="Markdown")
         return ESPERANDO_FOTOS
 
-    # Descargar fotos del hecho
     fotos_hecho_bytes = await descargar_fotos(fotos_hecho_ids, context.bot)
 
-    # Para reportaje, además hay testimonios y fotos de testimonios (opcionales)
     if genero_key == "reportaje":
         testimonios = context.user_data.get("testimonios", [])
         if len(testimonios) < 2:
