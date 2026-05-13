@@ -555,6 +555,18 @@ async def iniciar_testimonios(update: Update, context: ContextTypes.DEFAULT_TYPE
     return RECOLECTANDO_TESTIMONIOS
 
 async def handle_testimonio_texto(update: Update, context: ContextTypes.DEFAULT_TYPE, texto_alternativo: str = None) -> int:
+    # Manejo de la ampliación opcional
+    if context.user_data.get("esperando_ampliacion"):
+        texto = texto_alternativo if texto_alternativo is not None else update.message.text.strip()
+        if texto == "-" or texto == "":
+            context.user_data["ampliacion_info"] = ""
+        else:
+            context.user_data["ampliacion_info"] = texto
+        context.user_data["esperando_ampliacion"] = False
+        # Después de la ampliación, pasar a generar el borrador
+        return await cmd_generar(update, context)
+    
+    # Lógica normal de recolección de testimonios
     texto = texto_alternativo if texto_alternativo is not None else update.message.text.strip()
     paso = context.user_data.get("testimonio_paso", "nombre")
     actual = context.user_data.get("testimonio_actual", {})
