@@ -1,6 +1,7 @@
 """
 CHATBOT REFUGIO LATINOAMERICANO — Webhook (sin polling)
 Versión completa: reportaje con testimonios, dos preguntas (audio/texto), fotos separadas, video opcional.
+Corregido: sin estados fantasma, ampliación funciona, resumen con testimonios, token oculto, /ayuda.
 """
 
 import os
@@ -8,6 +9,7 @@ import base64
 import logging
 import json
 import requests
+import re
 from urllib.parse import urlparse
 from telegram import Update, ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 from telegram.ext import (
@@ -41,10 +43,10 @@ if not RENDER_EXTERNAL_URL:
     logger.error("RENDER_EXTERNAL_URL no configurada. El webhook no funcionará.")
 PORT = int(os.getenv("PORT", 8080))
 
-# ========== ESTADOS DEL CONVERSATIONHANDLER ==========
-(AUTENTICACION, IDENTIFICACION, SELECCION_GENERO, INICIO_FLUJO,
+# ========== ESTADOS DEL CONVERSATIONHANDLER (sin estados fantasma) ==========
+(AUTENTICACION, IDENTIFICACION, SELECCION_GENERO,
  RESPONDIENDO_PREGUNTA, REVISION_RESUMEN, EDITANDO_RESPUESTA,
- ESPERANDO_FOTOS, CIERRE_ETICO, RECOLECTANDO_TESTIMONIOS) = range(10)
+ ESPERANDO_FOTOS, RECOLECTANDO_TESTIMONIOS) = range(8)
 
 # ========== GÉNEROS PERIODÍSTICOS ==========
 GENEROS = {
@@ -380,7 +382,7 @@ def generar_borrador(respuestas: dict, nombre: str, genero_key: str, fotos: int,
     )
     return resultado if resultado else "❌ Error al generar el borrador."
 
-# ========== RESUMEN EDITABLE ==========
+# ========== FUNCIONES AUXILIARES ==========
 def construir_resumen(respuestas: dict, flujo: dict) -> str:
     preguntas = flujo["preguntas"]
     lineas = ["📋 *Resumen de tu reporte*\n"]
@@ -414,7 +416,18 @@ def teclado_numeros(flujo: dict) -> InlineKeyboardMarkup:
     botones.append([InlineKeyboardButton("↩️ Volver al resumen", callback_data="resumen:volver")])
     return InlineKeyboardMarkup(botones)
 
-# ========== MINI APP + MULTIMEDIA + EMAIL ==========
+def teclado_testimonio_opciones() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("➕ Agregar otro testimonio (máx 3)", callback_data="testimonio:agregar")],
+        [InlineKeyboardButton("✅ Finalizar testimonios", callback_data="testimonio:finalizar")],
+    ])
+
+def teclado_consentimiento_fotos() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📸 Sí, tengo consentimiento", callback_data="fotos:si")],
+        [InlineKeyboardButton("🚫 No, sin fotos", callback_data="fotos:no")],
+    ])
+
 def get_mini_app_url(pregunta_texto: str, clave: str) -> str:
     base_url = os.getenv("MINI_APP_URL", "")
     if not base_url:
@@ -503,24 +516,11 @@ def enviar_con_resend(borrador: str, nombre: str, titulo: str, genero_nombre: st
         return False
 
 def extraer_titulo(borrador: str) -> str:
-    for linea in borrador.split("\n"):
-        linea = linea.strip()
-        if linea.startswith("TÍTULO:") or linea.startswith("TITULO:"):
-            return linea.split(":", 1)[1].strip()
+    """Extrae el título del borrador usando regex (soporta **TÍTULO:** o TITULO: con/sin asteriscos)"""
+    match = re.search(r'\*{0,2}T[IÍ]TULO\*{0,2}:\s*(.+)', borrador, re.IGNORECASE)
+    if match:
+        return match.group(1).strip()
     return "Borrador sin título"
-
-# ========== FUNCIONES AUXILIARES PARA TESTIMONIOS ==========
-def teclado_testimonio_opciones() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("➕ Agregar otro testimonio (máx 3)", callback_data="testimonio:agregar")],
-        [InlineKeyboardButton("✅ Finalizar testimonios", callback_data="testimonio:finalizar")],
-    ])
-
-def teclado_consentimiento_fotos() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📸 Sí, tengo consentimiento", callback_data="fotos:si")],
-        [InlineKeyboardButton("🚫 No, sin fotos", callback_data="fotos:no")],
-    ])
 
 # ========== HANDLERS DEL FLUJO ==========
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -553,6 +553,18 @@ async def reiniciar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     )
     await update.message.reply_text(msg, parse_mode="Markdown", reply_markup=teclado)
     return SELECCION_GENERO
+
+async def ayuda(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Comando /ayuda: lista los comandos disponibles"""
+    await update.message.reply_text(
+        "📖 *Comandos disponibles:*\n\n"
+        "/start - Iniciar el bot (requiere contraseña)\n"
+        "/reiniciar - Comenzar un nuevo reporte sin cerrar sesión\n"
+        "/generar - Generar el borrador después de enviar fotos\n"
+        "/cancelar - Cancelar el reporte actual\n"
+        "/ayuda - Mostrar este mensaje",
+        parse_mode="Markdown"
+    )
 
 async def handle_autenticacion(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if update.message.text.strip() == os.getenv("BOT_PASSWORD", ""):
@@ -694,6 +706,7 @@ async def procesar_respuesta(update, context, texto_respuesta: str) -> int:
         else:
             return await mostrar_resumen(update.message, context)
 
+# ========== TESTIMONIOS: HANDLERS ==========
 async def iniciar_testimonios(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["testimonios"] = []
     context.user_data["testimonio_actual"] = {}
@@ -913,6 +926,12 @@ async def mostrar_resumen(message, context) -> int:
     genero_key = context.user_data["genero"]
     flujo = obtener_flujo(genero_key)
     resumen = construir_resumen(context.user_data["respuestas"], flujo)
+    
+    # Si es reportaje y hay testimonios, agregar información
+    if genero_key == "reportaje" and context.user_data.get("testimonios"):
+        num_testimonios = len(context.user_data["testimonios"])
+        resumen += f"\n\n📢 *Testimonios recolectados:* {num_testimonios}"
+    
     await message.reply_text(
         resumen + "\n\n_Revisá tus respuestas antes de continuar._",
         parse_mode="Markdown",
@@ -1011,6 +1030,7 @@ async def handle_foto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
             await update.message.reply_text(f"📸 Foto {recibidas} de {necesarias} recibida. Enviá la siguiente foto (o /listo si ya están todas).")
         else:
             await update.message.reply_text(f"✅ Recibidas las {necesarias} fotos de testimonios.")
+            # Preguntar ampliación y volver a RECOLECTANDO_TESTIMONIOS para que el texto sea procesado
             await update.message.reply_text(
                 "📝 *Información adicional*\n\n"
                 "¿Hay algún dato o contexto relevante que quieras agregar al reportaje?\n"
@@ -1019,7 +1039,7 @@ async def handle_foto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
             )
             context.user_data["esperando_ampliacion"] = True
             context.user_data["esperando_fotos_testimonios"] = False
-        return ESPERANDO_FOTOS
+            return RECOLECTANDO_TESTIMONIOS   # <--- CORREGIDO
     else:
         foto = update.message.photo[-1]
         if "foto_ids" not in context.user_data:
@@ -1132,51 +1152,17 @@ async def cancelar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text("Cancelado. /start para comenzar.", reply_markup=ReplyKeyboardRemove())
     return ConversationHandler.END
 
-# ========== AUTO‑PING ==========
-def start_self_pinger(port: int, interval_seconds: int = 240):
-    def pinger():
-        url = f"http://localhost:{port}/health"
-        while True:
-            try:
-                with urllib.request.urlopen(url, timeout=10) as response:
-                    if response.status == 200:
-                        logger.debug("Self-ping exitoso a /health")
-                    else:
-                        logger.warning(f"Self-ping respuesta inesperada: {response.status}")
-            except Exception as e:
-                logger.error(f"Error en self-ping: {e}")
-            time.sleep(interval_seconds)
-    thread = threading.Thread(target=pinger, daemon=True)
-    thread.start()
-    logger.info(f"Auto‑pinger iniciado (cada {interval_seconds}s en puerto {port})")
-
-# ========== WEBHOOK Y SERVIDOR ==========
-async def health_check(request: Request) -> JSONResponse:
-    return JSONResponse({"status": "ok"})
-
-async def webhook_endpoint(request: Request) -> PlainTextResponse:
-    try:
-        body = await request.json()
-        update = Update.de_json(body, application.bot)
-        await application.process_update(update)
-        return PlainTextResponse("", status_code=200)
-    except Exception as e:
-        logger.error(f"Error en webhook: {e}")
-        return PlainTextResponse("", status_code=500)
-
-async def set_webhook():
-    render_url = os.getenv("RENDER_EXTERNAL_URL")
-    if not render_url:
-        logger.error("RENDER_EXTERNAL_URL no configurada. El webhook no se establecerá.")
-        return
-    webhook_url = f"{render_url}/webhook/{TOKEN}"
-    await application.bot.set_webhook(url=webhook_url, drop_pending_updates=True)
-    logger.info(f"Webhook configurado en {webhook_url}")
-
-# ========== PUNTO DE ENTRADA ==========
-if __name__ == "__main__":
+# ========== PUNTO DE ENTRADA MAIN ==========
+def main():
     application = Application.builder().token(TOKEN).build()
 
+    # Registrar comandos
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("reiniciar", reiniciar))
+    application.add_handler(CommandHandler("ayuda", ayuda))
+    application.add_handler(CommandHandler("cancelar", cancelar))
+
+    # ConversationHandler
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start), CommandHandler("reiniciar", reiniciar)],
         states={
@@ -1216,6 +1202,50 @@ if __name__ == "__main__":
     )
     application.add_handler(conv_handler)
 
+    # ========== WEBHOOK Y SERVIDOR (definidas dentro de main para capturar application) ==========
+    async def health_check(request: Request) -> JSONResponse:
+        return JSONResponse({"status": "ok"})
+
+    async def webhook_endpoint(request: Request) -> PlainTextResponse:
+        try:
+            body = await request.json()
+            update = Update.de_json(body, application.bot)
+            await application.process_update(update)
+            return PlainTextResponse("", status_code=200)
+        except Exception as e:
+            logger.error(f"Error en webhook: {e}")
+            return PlainTextResponse("", status_code=500)
+
+    async def set_webhook():
+        render_url = os.getenv("RENDER_EXTERNAL_URL")
+        if not render_url:
+            logger.error("RENDER_EXTERNAL_URL no configurada. El webhook no se establecerá.")
+            return
+        webhook_url = f"{render_url}/webhook/{TOKEN}"
+        await application.bot.set_webhook(url=webhook_url, drop_pending_updates=True)
+        # Ocultar token en logs
+        token_oculto = TOKEN[:10] + "..." + TOKEN[-5:] if len(TOKEN) > 15 else "***"
+        logger.info(f"Webhook configurado en {render_url}/webhook/{token_oculto}")
+
+    # ========== AUTO‑PING ==========
+    def start_self_pinger(port: int, interval_seconds: int = 240):
+        def pinger():
+            url = f"http://localhost:{port}/health"
+            while True:
+                try:
+                    with urllib.request.urlopen(url, timeout=10) as response:
+                        if response.status == 200:
+                            logger.debug("Self-ping exitoso a /health")
+                        else:
+                            logger.warning(f"Self-ping respuesta inesperada: {response.status}")
+                except Exception as e:
+                    logger.error(f"Error en self-ping: {e}")
+                time.sleep(interval_seconds)
+        thread = threading.Thread(target=pinger, daemon=True)
+        thread.start()
+        logger.info(f"Auto‑pinger iniciado (cada {interval_seconds}s en puerto {port}")
+
+    # ========== INICIAR WEBHOOK Y SERVIDOR ==========
     async def start_app():
         await application.initialize()
         await set_webhook()
@@ -1229,3 +1259,6 @@ if __name__ == "__main__":
 
     start_self_pinger(PORT, interval_seconds=240)
     asyncio.run(start_app())
+
+if __name__ == "__main__":
+    main()
