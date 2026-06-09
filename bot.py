@@ -1,7 +1,17 @@
 """
-CHATBOT REFUGIO LATINOAMERICANO — Webhook
-Corregido: handlers duplicados eliminados, route webhook fijo, handle_foto con returns explícitos,
-paréntesis en log corregido, estados sin fantasmas.
+CHATBOT REFUGIO LATINOAMERICANO — bot.py v8
+Géneros: Historia de vida, Denuncia, Reportaje
+IA: Gemini 2.5 Pro (borrador final) + Groq/Llama (repreguntas) + Groq/Whisper (transcripción)
+
+Variables de entorno:
+  TELEGRAM_BOT_TOKEN   → token del bot
+  GEMINI_API_KEY       → generación de borradores (Gemini 2.5 Pro)
+  GROQ_API_KEY         → repreguntas (Llama 3.3) + transcripción audio (Whisper)
+  RESEND_API_KEY       → envío de email al equipo editorial
+  EDITORIAL_EMAIL      → destinatario del borrador
+  BOT_PASSWORD         → contraseña de acceso
+  RENDER_EXTERNAL_URL  → URL pública del servicio en Render (para webhook)
+  MINI_APP_URL         → URL de la mini app de grabación (opcional)
 """
 
 import os
@@ -40,20 +50,31 @@ if not RENDER_EXTERNAL_URL:
     logger.error("RENDER_EXTERNAL_URL no configurada. El webhook no funcionará.")
 PORT = int(os.getenv("PORT", 8080))
 
-# Estados — sin fantasmas
+# Mensaje de error estándar (reutilizable)
+MSG_ERROR_GENERAR = (
+    "⚠️ *No pude generar el borrador en este momento.*\n\n"
+    "Puede ser un problema temporal del servicio de IA. "
+    "Tus respuestas no se perdieron — escribí /reiniciar para volver a empezar el flujo."
+)
+
+# Estados
 (AUTENTICACION, IDENTIFICACION, SELECCION_GENERO,
  RESPONDIENDO_PREGUNTA, REVISION_RESUMEN, EDITANDO_RESPUESTA,
  ESPERANDO_FOTOS, RECOLECTANDO_TESTIMONIOS) = range(8)
 
+# ═══════════════════════════════════════════════════════════════
+# GÉNEROS — solo Historia de vida, Denuncia, Reportaje
+# ═══════════════════════════════════════════════════════════════
+
 GENEROS = {
-    "historia_vida": {"nombre":"Historia de vida","descripcion":"Testimonio biográfico de una persona migrante","fotos_min":3,"estructura":"cronica"},
-    "denuncia": {"nombre":"Denuncia","descripcion":"Situación de vulneración de derechos","fotos_min":2,"estructura":"analisis"},
-    "evento": {"nombre":"Evento","descripcion":"Algo que pasó o va a pasar","fotos_min":2,"estructura":"noticia"},
-    "agenda": {"nombre":"Agenda / Servicio","descripcion":"Información útil para la comunidad","fotos_min":1,"estructura":"servicio"},
-    "explicador": {"nombre":"Explicador","descripcion":"Pedagogía sobre temas complejos","fotos_min":1,"estructura":"explicador"},
-    "cultura": {"nombre":"Cultura","descripcion":"Identidad, celebración, intercambio","fotos_min":2,"estructura":"cronica"},
-    "reportaje": {"nombre":"Reportaje","descripcion":"Análisis profundo de un fenómeno","fotos_min":2,"estructura":"reportaje"},
+    "historia_vida": {"nombre": "Historia de vida", "descripcion": "Testimonio biográfico de una persona migrante", "fotos_min": 3, "estructura": "cronica"},
+    "denuncia":      {"nombre": "Denuncia",          "descripcion": "Situación de vulneración de derechos",          "fotos_min": 2, "estructura": "analisis"},
+    "reportaje":     {"nombre": "Reportaje",         "descripcion": "Análisis profundo de un fenómeno",              "fotos_min": 2, "estructura": "reportaje"},
 }
+
+# ═══════════════════════════════════════════════════════════════
+# FLUJOS CONVERSACIONALES
+# ═══════════════════════════════════════════════════════════════
 
 FLUJO_HISTORIA_VIDA = {
     "entrada": (
@@ -64,14 +85,14 @@ FLUJO_HISTORIA_VIDA = {
         "Primero, contame brevemente *nombre completo, edad, ocupación y país de origen* de la persona que vas a entrevistar."
     ),
     "preguntas": [
-        {"clave":"identificacion","texto":"👤 *Datos de identificación*\n\nNombre completo, edad, ocupación y país de origen de la persona entrevistada."},
-        {"clave":"origen","texto":"🌍 *1. Origen*\n\n¿De dónde viene? ¿Cómo era su vida antes de migrar? ¿En qué año llegó al país y cuántos años tenía cuando dejó su lugar de origen? ¿Vino sola, o con familia, pareja y/o amigos?"},
-        {"clave":"motivos","texto":"🔄 *2. Motivos de movilidad*\n\n¿Qué razones le llevaron a emigrar? ¿Qué significó ese momento? ¿Cómo planificó su partida?"},
-        {"clave":"transito","texto":"🛤️ *3. Tránsito*\n\n¿Cómo fue el viaje? ¿Qué experiencias, obstáculos o emociones marcaron ese trayecto?"},
-        {"clave":"llegada","texto":"📍 *4. Llegada*\n\n¿Cuáles fueron sus primeras impresiones al llegar? ¿Qué situaciones o desafíos recuerda de esos primeros días? ¿Contaba con contactos previos con otros miembros de su comunidad?"},
-        {"clave":"laboral","texto":"💼 *5. Inserción laboral*\n\n¿Cómo fue su inserción laboral en el país? ¿Actualmente está trabajando? ¿Trabaja por su cuenta o en relación de dependencia?"},
-        {"clave":"presente","texto":"🏡 *6. Presente*\n\n¿Cómo es su vida hoy? ¿A qué se dedica, qué vínculos construyó? ¿Se relaciona con personas de su comunidad acá? ¿Qué cosas echa de menos de su lugar de origen? ¿Cuáles son sus proyectos aquí?"},
-        {"clave":"horizonte","texto":"🔮 *7. Horizonte*\n\n¿Cómo vive hoy su identidad y sentido de pertenencia? ¿Piensa en regresar a su tierra de origen o proyecta su futuro acá?"},
+        {"clave": "identificacion", "texto": "👤 *Datos de identificación*\n\nNombre completo, edad, ocupación y país de origen de la persona entrevistada."},
+        {"clave": "origen",         "texto": "🌍 *1. Origen*\n\n¿De dónde viene? ¿Cómo era su vida antes de migrar? ¿En qué año llegó al país y cuántos años tenía cuando dejó su lugar de origen? ¿Vino sola, o con familia, pareja y/o amigos?"},
+        {"clave": "motivos",        "texto": "🔄 *2. Motivos de movilidad*\n\n¿Qué razones le llevaron a emigrar? ¿Qué significó ese momento? ¿Cómo planificó su partida?"},
+        {"clave": "transito",       "texto": "🛤️ *3. Tránsito*\n\n¿Cómo fue el viaje? ¿Qué experiencias, obstáculos o emociones marcaron ese trayecto?"},
+        {"clave": "llegada",        "texto": "📍 *4. Llegada*\n\n¿Cuáles fueron sus primeras impresiones al llegar? ¿Qué situaciones o desafíos recuerda de esos primeros días? ¿Contaba con contactos previos con otros miembros de su comunidad?"},
+        {"clave": "laboral",        "texto": "💼 *5. Inserción laboral*\n\n¿Cómo fue su inserción laboral en el país? ¿Actualmente está trabajando? ¿Trabaja por su cuenta o en relación de dependencia?"},
+        {"clave": "presente",       "texto": "🏡 *6. Presente*\n\n¿Cómo es su vida hoy? ¿A qué se dedica, qué vínculos construyó? ¿Se relaciona con personas de su comunidad acá? ¿Qué cosas echa de menos de su lugar de origen? ¿Cuáles son sus proyectos aquí?"},
+        {"clave": "horizonte",      "texto": "🔮 *7. Horizonte*\n\n¿Cómo vive hoy su identidad y sentido de pertenencia? ¿Piensa en regresar a su tierra de origen o proyecta su futuro acá?"},
     ],
 }
 
@@ -84,39 +105,52 @@ FLUJO_DENUNCIA = {
         "Contame en tus propias palabras qué está ocurriendo."
     ),
     "preguntas": [
-        {"clave":"naturaleza","texto":"🔍 *1. Naturaleza del problema*\n\n¿Qué tipo de situación se vive? (vulneración de derechos, discriminación, obstáculos para acceder a servicios, abuso institucional, violencia, trámite irregular). ¿Es un hecho puntual o una situación sostenida? ¿Afecta a una o muchas personas en situación similar?"},
-        {"clave":"personas_afectadas","texto":"👥 *2. Personas afectadas*\n\n¿Quiénes son las personas afectadas? ¿Se trata de una persona, familia, comunidad? ¿De qué país o comunidad provienen? ¿Qué las llevó a dejar su lugar de origen? ¿Hace cuánto viven en el país donde ocurre la situación? ¿Cuál es su situación migratoria actual (con residencia, en trámite, solicitantes de refugio, situación irregular)? ¿Hay dimensiones específicas (niñez, personas mayores, embarazadas, mujeres víctimas de violencia de género, personas LGBTIQ+, personas con discapacidad)?"},
-        {"clave":"identificacion_afectadas","texto":"🔐 *3. Cómo quieren ser identificadas*\n\n¿Cómo les gustaría a las personas afectadas ser identificadas en la nota? ¿Con sus nombres completos, iniciales o seudónimo? _Si están en situación de solicitud de refugio o irregularidad, siempre es mejor proteger su identidad._"},
-        {"clave":"responsables","texto":"🏛️ *4. Responsables*\n\n¿Quiénes son los responsables? (autoridad estatal, institución pública, empresa, particular). ¿Nombre, cargo, dependencia concreta? ¿Existe un marco normativo que se está incumpliendo?"},
-        {"clave":"lugar_momento","texto":"📍 *5. Lugar y momento*\n\n¿Dónde ocurre? (país, provincia, ciudad, barrio, dirección). ¿Cuándo? ¿Hecho puntual o sostenido en el tiempo?"},
-        {"clave":"gestiones","texto":"📋 *6. Gestiones previas*\n\n¿Las personas afectadas ya hicieron denuncia formal? ¿Dónde? ¿Número de expediente o acta? ¿Contactaron algún organismo, ONG, consulado, defensoría? ¿Qué respuesta recibieron?"},
-        {"clave":"testimonios","texto":"📢 *7. Testimonios y pruebas*\n\n¿Hay otras personas que hayan vivido o visto lo mismo y puedan testimoniar? ¿Documentos, capturas, audios, comunicaciones oficiales, pruebas materiales? ¿Alguna fuente experta (organización, abogada, académica, referente) que pueda aportar contexto?"},
-        {"clave":"impacto","texto":"💥 *8. Impacto personal y comunitario*\n\n¿Cómo afecta la vida cotidiana de las personas? _(sin enfocar solo en el sufrimiento — también en cómo resisten, se organizan, se defienden)_ ¿Qué consecuencias tiene en la comunidad más amplia? ¿Se están organizando para responder?"},
-        {"clave":"expectativas","texto":"🎯 *9. Qué esperan*\n\n¿Qué esperan lograr al visibilizar esta situación? ¿Hay demanda específica hacia alguna autoridad?"},
-        {"clave":"contraste","texto":"⚖️ *10. Contraste editorial*\n\n¿Refugio debería buscar la palabra de la institución, funcionario o empresa señalada antes de publicar? ¿O se publica tal como llega y esperamos una eventual respuesta?"},
+        {"clave": "naturaleza",              "texto": "🔍 *1. Naturaleza del problema*\n\n¿Qué tipo de situación se vive? (vulneración de derechos, discriminación, obstáculos para acceder a servicios, abuso institucional, violencia, trámite irregular). ¿Es un hecho puntual o una situación sostenida? ¿Afecta a una o muchas personas en situación similar?"},
+        {"clave": "personas_afectadas",      "texto": "👥 *2. Personas afectadas*\n\n¿Quiénes son las personas afectadas? ¿Se trata de una persona, familia, comunidad? ¿De qué país o comunidad provienen? ¿Qué las llevó a dejar su lugar de origen? ¿Hace cuánto viven en el país donde ocurre la situación? ¿Cuál es su situación migratoria actual (con residencia, en trámite, solicitantes de refugio, situación irregular)? ¿Hay dimensiones específicas (niñez, personas mayores, embarazadas, mujeres víctimas de violencia de género, personas LGBTIQ+, personas con discapacidad)?"},
+        {"clave": "identificacion_afectadas","texto": "🔐 *3. Cómo quieren ser identificadas*\n\n¿Cómo les gustaría a las personas afectadas ser identificadas en la nota? ¿Con sus nombres completos, iniciales o seudónimo? _Si están en situación de solicitud de refugio o irregularidad, siempre es mejor proteger su identidad._"},
+        {"clave": "responsables",            "texto": "🏛️ *4. Responsables*\n\n¿Quiénes son los responsables? (autoridad estatal, institución pública, empresa, particular). ¿Nombre, cargo, dependencia concreta? ¿Existe un marco normativo que se está incumpliendo?"},
+        {"clave": "lugar_momento",           "texto": "📍 *5. Lugar y momento*\n\n¿Dónde ocurre? (país, provincia, ciudad, barrio, dirección). ¿Cuándo? ¿Hecho puntual o sostenido en el tiempo?"},
+        {"clave": "gestiones",               "texto": "📋 *6. Gestiones previas*\n\n¿Las personas afectadas ya hicieron denuncia formal? ¿Dónde? ¿Número de expediente o acta? ¿Contactaron algún organismo, ONG, consulado, defensoría? ¿Qué respuesta recibieron?"},
+        {"clave": "testimonios",             "texto": "📢 *7. Testimonios y pruebas*\n\n¿Hay otras personas que hayan vivido o visto lo mismo y puedan testimoniar? ¿Documentos, capturas, audios, comunicaciones oficiales, pruebas materiales? ¿Alguna fuente experta (organización, abogada, académica, referente) que pueda aportar contexto?"},
+        {"clave": "impacto",                 "texto": "💥 *8. Impacto personal y comunitario*\n\n¿Cómo afecta la vida cotidiana de las personas? _(sin enfocar solo en el sufrimiento — también en cómo resisten, se organizan, se defienden)_ ¿Qué consecuencias tiene en la comunidad más amplia? ¿Se están organizando para responder?"},
+        {"clave": "expectativas",            "texto": "🎯 *9. Qué esperan*\n\n¿Qué esperan lograr al visibilizar esta situación? ¿Hay demanda específica hacia alguna autoridad?"},
+        {"clave": "contraste",               "texto": "⚖️ *10. Contraste editorial*\n\n¿Refugio debería buscar la palabra de la institución, funcionario o empresa señalada antes de publicar? ¿O se publica tal como llega y esperamos una eventual respuesta?"},
     ],
 }
 
-FLUJO_GENERICO_7W = {
-    "entrada": "📰 *{nombre}*\n\nContame en tus propias palabras de qué se trata.",
+FLUJO_REPORTAJE = {
+    "entrada": (
+        "📰 *Reportaje*\n\n"
+        "Vas a registrar un reportaje — un análisis profundo de un fenómeno vinculado a las migraciones. "
+        "Después de las preguntas base, vas a poder sumar testimonios de fuentes externas.\n\n"
+        "Contame en tus propias palabras de qué se trata el fenómeno que querés abordar."
+    ),
     "preguntas": [
-        {"clave":"que","texto":"📰 *¿QUÉ ocurrió?*\n\nDescribí el hecho central."},
-        {"clave":"quien","texto":"👤 *¿QUIÉN/ES?*\n\nPersonas, organizaciones o comunidades involucradas."},
-        {"clave":"cuando","texto":"🕐 *¿CUÁNDO?*\n\nFecha, hora, contexto temporal."},
-        {"clave":"donde","texto":"📍 *¿DÓNDE?*\n\nPaís, ciudad, barrio, dirección."},
-        {"clave":"como","texto":"🔍 *¿CÓMO?*\n\nSecuencia de eventos, circunstancias."},
-        {"clave":"por_que","texto":"💡 *¿POR QUÉ?*\n\nCausas, contexto, antecedentes."},
-        {"clave":"impacto","texto":"🎯 *¿IMPACTO?*\n\nConsecuencias para la comunidad migrante."},
+        {"clave": "tema",        "texto": "📰 *1. Tema central*\n\n¿Cuál es el fenómeno o proceso que querés analizar? ¿Por qué es relevante hoy para la comunidad migrante?"},
+        {"clave": "contexto",    "texto": "🗺️ *2. Contexto*\n\n¿Cuál es el trasfondo histórico, social o político? ¿Es algo nuevo o una situación estructural?"},
+        {"clave": "protagonistas","texto": "👥 *3. Protagonistas*\n\n¿Qué personas, comunidades u organizaciones están involucradas? ¿Cómo viven o enfrentan este fenómeno?"},
+        {"clave": "datos",       "texto": "📊 *4. Datos y evidencia*\n\n¿Qué datos, cifras, informes o fuentes documentales respaldan el reportaje? ¿De dónde provienen?"},
+        {"clave": "tensiones",   "texto": "⚡ *5. Tensiones y conflictos*\n\n¿Qué intereses están en juego? ¿Hay responsables institucionales o disputas que el reportaje deba señalar?"},
+        {"clave": "agencia",     "texto": "✊ *6. Agencia y respuestas*\n\n¿Cómo se organizan, resisten o responden las personas y comunidades afectadas?"},
+        {"clave": "proyeccion",  "texto": "🔮 *7. Proyección*\n\n¿Hacia dónde va este fenómeno? ¿Qué debería cambiar y qué se espera a futuro?"},
     ],
 }
+
 
 def obtener_flujo(genero_key: str) -> dict:
-    if genero_key == "historia_vida": return FLUJO_HISTORIA_VIDA
-    elif genero_key == "denuncia": return FLUJO_DENUNCIA
-    else:
-        flujo = dict(FLUJO_GENERICO_7W)
-        flujo["entrada"] = FLUJO_GENERICO_7W["entrada"].format(nombre=GENEROS[genero_key]["nombre"])
-        return flujo
+    if genero_key == "historia_vida":
+        return FLUJO_HISTORIA_VIDA
+    elif genero_key == "denuncia":
+        return FLUJO_DENUNCIA
+    elif genero_key == "reportaje":
+        return FLUJO_REPORTAJE
+    # Fallback defensivo (no debería ocurrir con solo 3 géneros)
+    return FLUJO_DENUNCIA
+
+
+# ═══════════════════════════════════════════════════════════════
+# PROMPTS EDITORIALES
+# ═══════════════════════════════════════════════════════════════
 
 PROMPT_BASE = """Sos editor/a periodístico de Refugio Latinoamericano, medio digital especializado en periodismo de migraciones con perspectiva de derechos humanos e interculturalidad.
 
@@ -157,22 +191,33 @@ ESTRUCTURA — ANÁLISIS:
 9. ETIQUETAS SUGERIDAS
 10. NOTAS PARA EL EDITOR/A: protección de identidades, riesgo de represalia"""
 
-PROMPT_GENERICO = PROMPT_BASE + """
+PROMPT_REPORTAJE = PROMPT_BASE + """
 
-ESTRUCTURA:
-1. TÍTULO: máximo 12 palabras
-2. BAJADA: 2-3 oraciones
-3. DESARROLLO: 3-5 párrafos con las 7W
-4. CITA DIRECTA si hay testimonio
-5. CIERRE
-6. VERIFICACIÓN PENDIENTE
-7. ETIQUETAS SUGERIDAS
-8. NOTAS PARA EL EDITOR/A"""
+ESTRUCTURA — REPORTAJE:
+1. TÍTULO: máximo 12 palabras, sin punto final
+2. BAJADA: 2-3 oraciones con el eje editorial
+3. APERTURA: presentación del fenómeno y su relevancia actual
+4. DESARROLLO: a) contexto histórico/estructural b) protagonistas y cómo lo viven c) datos y evidencia d) tensiones y responsables e) agencia y respuestas comunitarias
+5. CITAS: integrar los testimonios de fuentes externas de forma orgánica
+6. CIERRE: proyección a futuro
+7. VERIFICACIÓN PENDIENTE: [VERIFICAR] dato
+8. ETIQUETAS SUGERIDAS: 3-5 etiquetas
+9. NOTAS PARA EL EDITOR/A: fuentes a contrastar, datos a verificar, protección de identidades"""
+
 
 def obtener_prompt(genero_key: str) -> str:
-    if genero_key == "historia_vida": return PROMPT_HISTORIA_VIDA
-    elif genero_key == "denuncia": return PROMPT_DENUNCIA
-    else: return PROMPT_GENERICO
+    if genero_key == "historia_vida":
+        return PROMPT_HISTORIA_VIDA
+    elif genero_key == "denuncia":
+        return PROMPT_DENUNCIA
+    elif genero_key == "reportaje":
+        return PROMPT_REPORTAJE
+    return PROMPT_DENUNCIA
+
+
+# ═══════════════════════════════════════════════════════════════
+# GROQ — repreguntas + transcripción de audio
+# ═══════════════════════════════════════════════════════════════
 
 def llamar_groq(messages: list, max_tokens: int = 400, temperature: float = 0.3,
                 response_format: dict = None):
@@ -180,48 +225,85 @@ def llamar_groq(messages: list, max_tokens: int = 400, temperature: float = 0.3,
     if not api_key:
         logger.error("Falta GROQ_API_KEY")
         return None
-    payload = {"model":"llama-3.3-70b-versatile","messages":messages,"max_tokens":max_tokens,"temperature":temperature}
+    payload = {
+        "model": "llama-3.3-70b-versatile",
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+    }
     if response_format:
         payload["response_format"] = response_format
     try:
         r = requests.post(
             "https://api.groq.com/openai/v1/chat/completions",
-            headers={"Authorization":f"Bearer {api_key}","Content-Type":"application/json"},
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
             json=payload, timeout=90
         )
         data = r.json()
         if "choices" in data:
             return data["choices"][0]["message"]["content"]
-        logger.error(f"Error Groq: {data.get('error',{}).get('message','desconocido')}")
+        logger.error(f"Error Groq: {data.get('error', {}).get('message', 'desconocido')}")
         return None
     except Exception as e:
         logger.error(f"Error llamando a Groq: {e}")
         return None
 
-PROMPT_ANALISTA = """Analizá la respuesta de un corresponsal de campo.
-Criterios:
-1. PROFUNDIDAD: menos de 15 palabras significativas o muy vaga
-2. INCONSISTENCIA TEMPORAL: referencias contradictorias
-3. AMBIGÜEDAD: falta información clave
 
-IMPORTANTE: No repreguntés si la respuesta es clara y concreta, aunque sea breve.
-Respondé SOLO con JSON: {"necesita_repregunta": true/false, "tipo": "profundidad"|"inconsistencia"|"ambiguedad"|null, "repregunta": "texto con eco empático"|null}"""
+# Motor de repreguntas — mejorado para coherencia con el flujo
+PROMPT_ANALISTA = """Sos editor/a de campo de Refugio Latinoamericano, un medio de periodismo de migraciones con perspectiva de derechos humanos. Estás acompañando a un corresponsal mientras completa un cuestionario, pregunta por pregunta.
 
-def analizar_respuesta_con_groq(pregunta: str, respuesta: str) -> dict:
+Tu tarea: decidir si la respuesta del corresponsal a UNA pregunta específica necesita una repregunta para enriquecer el material periodístico.
+
+Repreguntá SOLO si se cumple alguno de estos criterios:
+1. PROFUNDIDAD: la respuesta es vaga, genérica o demasiado breve para sostener un párrafo periodístico (menos de ~15 palabras significativas).
+2. INCONSISTENCIA TEMPORAL: hay referencias temporales contradictorias o confusas.
+3. AMBIGÜEDAD: falta un dato clave que la pregunta pedía explícitamente.
+
+NO repreguntés si:
+- La respuesta es clara, concreta y específica, aunque sea breve.
+- El corresponsal ya respondió lo esencial de la pregunta.
+- Sería redundante con lo que ya dijo.
+
+Si repreguntás, la repregunta debe:
+- Empezar con un eco empático breve (parafraseo de lo que dijo el corresponsal).
+- Pedir SOLO lo que falta de ESTA pregunta, sin adelantarte a preguntas futuras del cuestionario.
+- Estar redactada en español rioplatense (voseo), tono cálido y profesional.
+- Ser una sola repregunta concreta, no una lista.
+
+Respondé EXCLUSIVAMENTE con un JSON válido, sin texto adicional:
+{"necesita_repregunta": true/false, "tipo": "profundidad"|"inconsistencia"|"ambiguedad"|null, "repregunta": "texto"|null}"""
+
+
+def analizar_respuesta_con_groq(pregunta: str, respuesta: str, genero_nombre: str = "") -> dict:
+    # Limpiar markdown de la pregunta para que el analista vea el texto real
+    pregunta_limpia = re.sub(r'[*_]', '', pregunta).strip()
+    contexto = f"GÉNERO PERIODÍSTICO: {genero_nombre}\n\n" if genero_nombre else ""
     resultado = llamar_groq(
         messages=[
-            {"role":"system","content":PROMPT_ANALISTA},
-            {"role":"user","content":f"PREGUNTA:\n{pregunta}\n\nRESPUESTA:\n{respuesta}\n\nRespondé SOLO con el JSON."}
+            {"role": "system", "content": PROMPT_ANALISTA},
+            {"role": "user", "content": (
+                f"{contexto}PREGUNTA DEL CUESTIONARIO:\n{pregunta_limpia}\n\n"
+                f"RESPUESTA DEL CORRESPONSAL:\n{respuesta}\n\n"
+                f"Analizá y respondé SOLO con el JSON."
+            )}
         ],
         max_tokens=400, temperature=0.3,
-        response_format={"type":"json_object"}
+        response_format={"type": "json_object"}
     )
     if resultado:
         try:
-            return json.loads(resultado)
+            parsed = json.loads(resultado)
+            # Validación de coherencia del JSON
+            if not isinstance(parsed.get("necesita_repregunta"), bool):
+                return {"necesita_repregunta": False, "tipo": None, "repregunta": None}
+            if parsed["necesita_repregunta"] and not parsed.get("repregunta"):
+                # Dice que necesita repregunta pero no la formuló → no repreguntar
+                return {"necesita_repregunta": False, "tipo": None, "repregunta": None}
+            return parsed
         except Exception as e:
-            logger.error(f"Error parseando JSON: {e}")
-    return {"necesita_repregunta":False,"tipo":None,"repregunta":None}
+            logger.error(f"Error parseando JSON repreguntas: {e}")
+    return {"necesita_repregunta": False, "tipo": None, "repregunta": None}
+
 
 async def transcribir_audio_groq(file_id: str, bot) -> str:
     api_key = os.getenv("GROQ_API_KEY")
@@ -232,9 +314,10 @@ async def transcribir_audio_groq(file_id: str, bot) -> str:
         audio_bytes = await file.download_as_bytearray()
         response = requests.post(
             "https://api.groq.com/openai/v1/audio/transcriptions",
-            headers={"Authorization":f"Bearer {api_key}"},
-            files={"file":("audio.ogg",bytes(audio_bytes),"audio/ogg")},
-            data={"model":"whisper-large-v3","language":"es","prompt":"Entrevista periodística sobre migraciones en América Latina."},
+            headers={"Authorization": f"Bearer {api_key}"},
+            files={"file": ("audio.ogg", bytes(audio_bytes), "audio/ogg")},
+            data={"model": "whisper-large-v3", "language": "es",
+                  "prompt": "Entrevista periodística sobre migraciones en América Latina."},
             timeout=60
         )
         data = response.json()
@@ -245,58 +328,184 @@ async def transcribir_audio_groq(file_id: str, bot) -> str:
         logger.error(f"Error transcripción: {e}")
         return "[Error al transcribir. Respondé en texto.]"
 
+
+# ═══════════════════════════════════════════════════════════════
+# GEMINI 2.5 PRO — generación de borradores (robusto, anti-bloqueo)
+# ═══════════════════════════════════════════════════════════════
+
+# Umbrales bajos: el contenido de DDHH (violencia institucional, abuso, etc.)
+# es legítimo y los filtros por defecto bloquean material periodístico válido.
+GEMINI_SAFETY_SETTINGS = [
+    {"category": "HARM_CATEGORY_HARASSMENT",        "threshold": "BLOCK_NONE"},
+    {"category": "HARM_CATEGORY_HATE_SPEECH",       "threshold": "BLOCK_NONE"},
+    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+]
+
+
+def llamar_gemini(prompt_sistema: str, prompt_usuario: str, max_tokens: int = 8000):
+    """
+    Llama a Gemini 2.5 Pro. Devuelve una tupla (texto, motivo_error).
+    - Si todo sale bien: (texto, None)
+    - Si falla: (None, "motivo legible para logs")
+    Maneja: bloqueo de prompt, finishReason SAFETY/MAX_TOKENS, candidates vacíos.
+    """
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        return None, "Falta GEMINI_API_KEY"
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key={api_key}"
+
+    payload = {
+        "system_instruction": {"parts": [{"text": prompt_sistema}]},
+        "contents": [{"role": "user", "parts": [{"text": prompt_usuario}]}],
+        "safetySettings": GEMINI_SAFETY_SETTINGS,
+        "generationConfig": {
+            "maxOutputTokens": max_tokens,   # alto para que el razonamiento no ahogue la salida
+            "temperature": 0.6,              # más consistencia, menos reintentos
+            "responseMimeType": "text/plain",
+        },
+    }
+
+    try:
+        r = requests.post(url, json=payload, timeout=120)
+        data = r.json()
+
+        # 1) Bloqueo del PROMPT DE ENTRADA (no hay candidates, viene promptFeedback)
+        prompt_feedback = data.get("promptFeedback", {})
+        block_reason = prompt_feedback.get("blockReason")
+        if block_reason:
+            return None, f"Prompt bloqueado por Gemini (blockReason={block_reason})"
+
+        # 2) Error explícito de la API
+        if "error" in data:
+            msg = data["error"].get("message", "desconocido")
+            return None, f"Error API Gemini: {msg}"
+
+        # 3) Sin candidates
+        candidates = data.get("candidates", [])
+        if not candidates:
+            return None, "Gemini no devolvió candidates"
+
+        candidate = candidates[0]
+        finish_reason = candidate.get("finishReason", "")
+
+        # 4) Extraer texto si existe
+        content = candidate.get("content", {})
+        parts = content.get("parts", [])
+        texto = parts[0].get("text", "").strip() if parts else ""
+
+        # 5) Evaluar finishReason
+        if finish_reason == "SAFETY":
+            return None, "Respuesta bloqueada por filtros de seguridad (finishReason=SAFETY)"
+        if finish_reason == "RECITATION":
+            return None, "Respuesta bloqueada por recitación (finishReason=RECITATION)"
+        if finish_reason == "MAX_TOKENS" and not texto:
+            return None, "Se agotaron los tokens sin generar texto (finishReason=MAX_TOKENS)"
+
+        # 6) Texto válido
+        if texto:
+            return texto, None
+
+        return None, f"Gemini devolvió texto vacío (finishReason={finish_reason or 'desconocido'})"
+
+    except requests.exceptions.Timeout:
+        return None, "Timeout llamando a Gemini"
+    except Exception as e:
+        return None, f"Excepción llamando a Gemini: {e}"
+
+
+def _construir_prompt_usuario(respuestas: dict, nombre: str, genero_nombre: str, fotos: int,
+                              testimonios: list = None, ampliacion: str = "") -> str:
+    datos = "\n".join(f"{k.upper()}: {v}" for k, v in respuestas.items())
+    texto_extra = ""
+    if testimonios:
+        texto_extra = "\n\n=== TESTIMONIOS ===\n"
+        for i, t in enumerate(testimonios, 1):
+            texto_extra += f"Testimonio {i}:\nNombre: {t.get('nombre', '')}\n"
+            if t.get("organizacion"):
+                texto_extra += f"Organización: {t['organizacion']}\n"
+            texto_extra += f"Nacionalidad: {t.get('nacionalidad', '')}\n"
+            if t.get("edad"):
+                texto_extra += f"Edad: {t['edad']}\n"
+            texto_extra += f"Pregunta 1: {t.get('pregunta1', '')}\n"
+            if t.get("pregunta2"):
+                texto_extra += f"Pregunta 2: {t['pregunta2']}\n"
+            texto_extra += f"Respuesta: {t.get('respuesta', '')}\n\n"
+    if ampliacion:
+        texto_extra += f"\n=== AMPLIACIÓN ===\n{ampliacion}\n"
+    return (
+        f"GÉNERO: {genero_nombre}\n"
+        f"CORRESPONSAL: {nombre}\n"
+        f"FOTOS ADJUNTAS: {fotos}\n\n"
+        f"REPORTE DEL CORRESPONSAL:\n{datos}{texto_extra}\n\n"
+        f"Redactá el borrador completo respetando TODOS los criterios editoriales."
+    )
+
+
+def generar_borrador(respuestas: dict, nombre: str, genero_key: str, fotos: int,
+                     testimonios: list = None, ampliacion: str = ""):
+    """
+    Genera el borrador con Gemini 2.5 Pro. Si Gemini falla, cae a Groq (gratis).
+    Devuelve (borrador, exito_bool). Si ambos fallan, borrador es None.
+    """
+    prompt_sistema = obtener_prompt(genero_key)
+    genero_nombre = GENEROS[genero_key]["nombre"]
+    instruccion = "\n\nUSÁ ÚNICAMENTE la información proporcionada. NO inventes datos, nombres, fechas ni estadísticas. Si falta un dato, marcalo con [VERIFICAR]."
+    prompt_sistema_completo = prompt_sistema + instruccion
+    prompt_usuario = _construir_prompt_usuario(respuestas, nombre, genero_nombre, fotos, testimonios, ampliacion)
+
+    # Intento principal: Gemini
+    texto, motivo_error = llamar_gemini(prompt_sistema_completo, prompt_usuario, max_tokens=8000)
+    if texto:
+        return texto, True
+
+    logger.warning(f"Gemini no generó borrador ({motivo_error}). Probando fallback Groq.")
+
+    # Fallback: Groq (no consume presupuesto de Gemini)
+    resultado_groq = llamar_groq(
+        messages=[
+            {"role": "system", "content": prompt_sistema_completo},
+            {"role": "user", "content": prompt_usuario}
+        ],
+        max_tokens=3000, temperature=0.7
+    )
+    if resultado_groq:
+        logger.info("Borrador generado con fallback Groq.")
+        return resultado_groq, True
+
+    logger.error("Falló Gemini y también el fallback Groq.")
+    return None, False
+
+
+# ═══════════════════════════════════════════════════════════════
+# UTILIDADES
+# ═══════════════════════════════════════════════════════════════
+
 def extraer_titulo(borrador: str) -> str:
     match = re.search(r'\*{0,2}T[IÍ]TULO\*{0,2}:\s*(.+)', borrador, re.IGNORECASE)
     if match:
         return match.group(1).strip().strip("*")
     return "Borrador sin título"
 
-def generar_borrador(respuestas: dict, nombre: str, genero_key: str, fotos: int,
-                     testimonios: list = None, ampliacion: str = "") -> str:
-    prompt_sistema = obtener_prompt(genero_key)
-    genero_nombre = GENEROS[genero_key]["nombre"]
-    datos = "\n".join(f"{k.upper()}: {v}" for k, v in respuestas.items())
-    texto_extra = ""
-    if testimonios:
-        texto_extra = "\n\n=== TESTIMONIOS ===\n"
-        for i, t in enumerate(testimonios, 1):
-            texto_extra += f"Testimonio {i}:\nNombre: {t.get('nombre','')}\n"
-            if t.get('organizacion'):
-                texto_extra += f"Organización: {t['organizacion']}\n"
-            texto_extra += f"Nacionalidad: {t.get('nacionalidad','')}\n"
-            if t.get('edad'):
-                texto_extra += f"Edad: {t['edad']}\n"
-            texto_extra += f"Pregunta 1: {t.get('pregunta1','')}\n"
-            if t.get('pregunta2'):
-                texto_extra += f"Pregunta 2: {t['pregunta2']}\n"
-            texto_extra += f"Respuesta: {t.get('respuesta','')}\n\n"
-    if ampliacion:
-        texto_extra += f"\n=== AMPLIACIÓN ===\n{ampliacion}\n"
-    instruccion = "\n\nUSÁ ÚNICAMENTE la información proporcionada. NO inventes datos, nombres, fechas ni estadísticas."
-    resultado = llamar_groq(
-        messages=[
-            {"role":"system","content":prompt_sistema + instruccion},
-            {"role":"user","content":f"GÉNERO: {genero_nombre}\nCORRESPONSAL: {nombre}\nFOTOS: {fotos}\n\nREPORTE:\n{datos}{texto_extra}\n\nRedactá el borrador completo."}
-        ],
-        max_tokens=3000, temperature=0.7
-    )
-    return resultado if resultado else "❌ Error al generar el borrador."
 
-def construir_resumen(respuestas: dict, flujo: dict, genero_key: str = None, testimonios: list = None) -> str:
+def construir_resumen(respuestas: dict, flujo: dict, genero_key: str = None,
+                      testimonios: list = None) -> str:
     preguntas = flujo["preguntas"]
     lineas = ["📋 *Resumen de tu reporte*\n"]
     for i, pregunta in enumerate(preguntas):
         clave = pregunta["clave"]
-        titulo = pregunta["texto"].split("\n")[0].replace("*","").strip()
-        respuesta = respuestas.get(clave,"_Sin respuesta_")
+        titulo = pregunta["texto"].split("\n")[0].replace("*", "").strip()
+        respuesta = respuestas.get(clave, "_Sin respuesta_")
         if len(respuesta) > 200:
             respuesta = respuesta[:200] + "..."
         lineas.append(f"*{i+1}. {titulo}*\n{respuesta}")
     if genero_key == "reportaje" and testimonios:
         lineas.append(f"\n📢 *Testimonios recolectados: {len(testimonios)}*")
         for i, t in enumerate(testimonios, 1):
-            lineas.append(f"  {i}. {t.get('nombre','Sin nombre')} ({t.get('nacionalidad','')})")
+            lineas.append(f"  {i}. {t.get('nombre', 'Sin nombre')} ({t.get('nacionalidad', '')})")
     return "\n\n".join(lineas)
+
 
 def teclado_resumen() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
@@ -304,11 +513,12 @@ def teclado_resumen() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("✅ Todo correcto, continuar", callback_data="resumen:confirmar")],
     ])
 
+
 def teclado_numeros(flujo: dict) -> InlineKeyboardMarkup:
     preguntas = flujo["preguntas"]
     botones, fila = [], []
     for i in range(len(preguntas)):
-        fila.append(InlineKeyboardButton(str(i+1), callback_data=f"editar:{i}"))
+        fila.append(InlineKeyboardButton(str(i + 1), callback_data=f"editar:{i}"))
         if len(fila) == 5:
             botones.append(fila)
             fila = []
@@ -317,43 +527,47 @@ def teclado_numeros(flujo: dict) -> InlineKeyboardMarkup:
     botones.append([InlineKeyboardButton("↩️ Volver al resumen", callback_data="resumen:volver")])
     return InlineKeyboardMarkup(botones)
 
+
 def teclado_generos() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📖 Historia de vida", callback_data="genero:historia_vida")],
-        [InlineKeyboardButton("⚖️ Denuncia", callback_data="genero:denuncia")],
-        [InlineKeyboardButton("📅 Evento", callback_data="genero:evento")],
-        [InlineKeyboardButton("📌 Agenda / Servicio", callback_data="genero:agenda")],
-        [InlineKeyboardButton("📚 Explicador", callback_data="genero:explicador")],
-        [InlineKeyboardButton("🎭 Cultura", callback_data="genero:cultura")],
-        [InlineKeyboardButton("📰 Reportaje", callback_data="genero:reportaje")],
+        [InlineKeyboardButton("⚖️ Denuncia",         callback_data="genero:denuncia")],
+        [InlineKeyboardButton("📰 Reportaje",         callback_data="genero:reportaje")],
     ])
+
 
 def teclado_testimonio_opciones() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("➕ Agregar otro testimonio (máx 3)", callback_data="testimonio:agregar")],
-        [InlineKeyboardButton("✅ Finalizar testimonios", callback_data="testimonio:finalizar")],
+        [InlineKeyboardButton("✅ Finalizar testimonios",           callback_data="testimonio:finalizar")],
     ])
+
 
 def teclado_consentimiento_fotos() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📸 Sí, tengo consentimiento", callback_data="fotos:si")],
-        [InlineKeyboardButton("🚫 No, sin fotos", callback_data="fotos:no")],
+        [InlineKeyboardButton("🚫 No, sin fotos",            callback_data="fotos:no")],
     ])
 
+
 def get_mini_app_url(pregunta_texto: str, clave: str) -> str:
-    base_url = os.getenv("MINI_APP_URL","")
+    base_url = os.getenv("MINI_APP_URL", "")
     if not base_url:
         return ""
     import urllib.parse
-    texto_limpio = pregunta_texto.replace("*","").replace("_","")[:200]
-    params = urllib.parse.urlencode({"label":clave.upper(),"texto":texto_limpio,"key":clave})
+    texto_limpio = pregunta_texto.replace("*", "").replace("_", "")[:200]
+    params = urllib.parse.urlencode({"label": clave.upper(), "texto": texto_limpio, "key": clave})
     return f"{base_url}?{params}"
+
 
 def construir_teclado_miniapp(pregunta_texto: str, clave: str):
     url = get_mini_app_url(pregunta_texto, clave)
     if url:
-        return InlineKeyboardMarkup([[InlineKeyboardButton("🎙️ Grabar respuesta en audio", web_app=WebAppInfo(url=url))]])
+        return InlineKeyboardMarkup([[
+            InlineKeyboardButton("🎙️ Grabar respuesta en audio", web_app=WebAppInfo(url=url))
+        ]])
     return None
+
 
 async def descargar_fotos(file_ids: list, bot) -> list:
     fotos_bytes = []
@@ -361,19 +575,21 @@ async def descargar_fotos(file_ids: list, bot) -> list:
         try:
             file = await bot.get_file(file_id)
             foto_bytes = await file.download_as_bytearray()
-            fotos_bytes.append({"nombre":f"foto_{i+1}.jpg","datos":bytes(foto_bytes)})
+            fotos_bytes.append({"nombre": f"foto_{i+1}.jpg", "datos": bytes(foto_bytes)})
         except Exception as e:
             logger.error(f"Error descargando foto {i+1}: {e}")
     return fotos_bytes
+
 
 async def descargar_video(video_id: str, bot) -> dict:
     try:
         file = await bot.get_file(video_id)
         video_bytes = await file.download_as_bytearray()
-        return {"nombre":"video.mp4","datos":bytes(video_bytes)}
+        return {"nombre": "video.mp4", "datos": bytes(video_bytes)}
     except Exception as e:
         logger.error(f"Error descargando video: {e}")
         return None
+
 
 def enviar_con_resend(borrador: str, nombre: str, titulo: str, genero_nombre: str,
                       fotos_bytes: list = None, video_bytes: dict = None) -> bool:
@@ -385,33 +601,47 @@ def enviar_con_resend(borrador: str, nombre: str, titulo: str, genero_nombre: st
         f"BORRADOR — REFUGIO LATINOAMERICANO\nPendiente de revisión editorial.\n\n"
         f"Género: {genero_nombre}\nCorresponsal: {nombre}\n"
         f"Fotos: {len(fotos_bytes) if fotos_bytes else 0}\nVideo: {'Sí' if video_bytes else 'No'}\n"
-        f"{'─'*50}\n\n{borrador}\n\n{'─'*50}\nGenerado por el Chatbot de Refugio Latinoamericano."
+        f"{'─'*50}\n\n{borrador}\n\n{'─'*50}\n"
+        f"Generado por el Chatbot de Refugio Latinoamericano."
     )
     payload = {
-        "from":"Chatbot Refugio Latinoamericano <onboarding@resend.dev>",
-        "to":[editorial_email],
-        "subject":f"[{genero_nombre.upper()}] {titulo} — {nombre}",
-        "text":cuerpo
+        "from": "Chatbot Refugio Latinoamericano <onboarding@resend.dev>",
+        "to": [editorial_email],
+        "subject": f"[{genero_nombre.upper()}] {titulo} — {nombre}",
+        "text": cuerpo
     }
     attachments = []
     if fotos_bytes:
-        attachments.extend([{"filename":f["nombre"],"content":base64.b64encode(f["datos"]).decode(),"type":"image/jpeg"} for f in fotos_bytes])
+        attachments.extend([
+            {"filename": f["nombre"], "content": base64.b64encode(f["datos"]).decode(), "type": "image/jpeg"}
+            for f in fotos_bytes
+        ])
     if video_bytes:
-        attachments.append({"filename":video_bytes["nombre"],"content":base64.b64encode(video_bytes["datos"]).decode(),"type":"video/mp4"})
+        attachments.append({
+            "filename": video_bytes["nombre"],
+            "content": base64.b64encode(video_bytes["datos"]).decode(),
+            "type": "video/mp4"
+        })
     if attachments:
         payload["attachments"] = attachments
     try:
-        r = requests.post("https://api.resend.com/emails",
-            headers={"Authorization":f"Bearer {api_key}","Content-Type":"application/json"},
-            json=payload, timeout=90)
-        return r.status_code in [200,201]
+        r = requests.post(
+            "https://api.resend.com/emails",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json=payload, timeout=90
+        )
+        return r.status_code in [200, 201]
     except Exception as e:
         logger.error(f"Error Resend: {e}")
         return False
 
-# ===== HANDLERS =====
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+# ═══════════════════════════════════════════════════════════════
+# HANDLERS
+# ═══════════════════════════════════════════════════════════════
+
+async def comenzar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Punto de entrada principal. /comenzar y /start llevan acá."""
     context.user_data.clear()
     await update.message.reply_text(
         "Hola. Soy el *Chatbot - Refugio Latinoamericano*.\n\n🔐 Ingresá la contraseña de acceso:",
@@ -419,19 +649,24 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     )
     return AUTENTICACION
 
+
 async def reiniciar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    nombre = context.user_data.get("nombre","")
+    nombre = context.user_data.get("nombre", "")
     context.user_data.clear()
     if nombre:
         context.user_data["nombre"] = nombre
-    msg = f"🔄 *Nuevo reporte*{f' — {nombre}' if nombre else ''}\n\n¿Qué tipo de nota vas a registrar?\n\n_Elegí el género periodístico._"
+    msg = (
+        f"🔄 *Nuevo reporte*{f' — {nombre}' if nombre else ''}\n\n"
+        "¿Qué tipo de nota vas a registrar?\n\n_Elegí el género periodístico._"
+    )
     await update.message.reply_text(msg, parse_mode="Markdown", reply_markup=teclado_generos())
     return SELECCION_GENERO
+
 
 async def ayuda(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         "📖 *Comandos disponibles:*\n\n"
-        "/start — Iniciar sesión\n"
+        "/comenzar — Iniciar sesión\n"
         "/reiniciar — Nuevo reporte (mantiene tu nombre)\n"
         "/generar — Generar borrador y enviar al equipo\n"
         "/listo — Confirmar fotos de testimonios (solo reportajes)\n"
@@ -440,41 +675,52 @@ async def ayuda(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         parse_mode="Markdown"
     )
 
+
 async def handle_autenticacion(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if update.message.text.strip() == os.getenv("BOT_PASSWORD",""):
-        await update.message.reply_text("✅ *Acceso autorizado.*\n\nIngresá tu *nombre y apellido completo*:", parse_mode="Markdown")
+    if update.message.text.strip() == os.getenv("BOT_PASSWORD", ""):
+        await update.message.reply_text(
+            "✅ *Acceso autorizado.*\n\nIngresá tu *nombre y apellido completo*:",
+            parse_mode="Markdown")
         return IDENTIFICACION
-    await update.message.reply_text("❌ *Contraseña incorrecta.*\n\nEscribí /start para intentar de nuevo.", parse_mode="Markdown")
+    await update.message.reply_text(
+        "❌ *Contraseña incorrecta.*\n\nEscribí /comenzar para intentar de nuevo.",
+        parse_mode="Markdown")
     return ConversationHandler.END
+
 
 async def handle_identificacion(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     nombre = update.message.text.strip()
     if len(nombre.split()) < 2:
         await update.message.reply_text("Ingresá tu *nombre y apellido completo*.", parse_mode="Markdown")
         return IDENTIFICACION
-    context.user_data.update({"nombre":nombre,"respuestas":{},"fotos":0,"foto_ids":[]})
+    context.user_data.update({"nombre": nombre, "respuestas": {}, "fotos": 0, "foto_ids": []})
     await update.message.reply_text(
         f"Perfecto, *{nombre}*.\n\n¿Qué tipo de nota vas a registrar?\n\n_Elegí el género periodístico._",
         parse_mode="Markdown", reply_markup=teclado_generos()
     )
     return SELECCION_GENERO
 
+
 async def handle_seleccion_genero(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
     genero_key = query.data.split(":")[1]
     if genero_key not in GENEROS:
-        await query.edit_message_text("Género no válido.")
+        await query.edit_message_text("Género no válido. Escribí /reiniciar para volver a empezar.")
         return ConversationHandler.END
     context.user_data.update({
-        "genero":genero_key,"pregunta_idx":0,"repregunta_activa":False,
-        "respuestas":{},"fotos":0,"foto_ids":[]
+        "genero": genero_key, "pregunta_idx": 0, "repregunta_activa": False,
+        "respuestas": {}, "fotos": 0, "foto_ids": []
     })
     flujo = obtener_flujo(genero_key)
     await query.edit_message_text(f"✅ Seleccionaste: *{GENEROS[genero_key]['nombre']}*", parse_mode="Markdown")
-    await query.message.reply_text(flujo["entrada"] + "\n\n⚠️ _Ningún contenido se publica sin revisión editorial._", parse_mode="Markdown")
+    await query.message.reply_text(
+        flujo["entrada"] + "\n\n⚠️ _Ningún contenido se publica sin revisión editorial._",
+        parse_mode="Markdown"
+    )
     await enviar_pregunta_actual(query.message, context)
     return RESPONDIENDO_PREGUNTA
+
 
 async def enviar_pregunta_actual(message, context):
     genero_key = context.user_data["genero"]
@@ -488,8 +734,10 @@ async def enviar_pregunta_actual(message, context):
     texto = f"*Pregunta {idx+1}/{total}*\n\n{pregunta['texto']}\n\n_Escribí tu respuesta o usá el botón para grabar un audio._"
     await message.reply_text(texto, parse_mode="Markdown", reply_markup=teclado)
 
+
 async def handle_respuesta_texto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return await procesar_respuesta(update, context, update.message.text)
+
 
 async def handle_respuesta_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text("🎙️ _Transcribiendo audio..._", parse_mode="Markdown")
@@ -498,17 +746,18 @@ async def handle_respuesta_audio(update: Update, context: ContextTypes.DEFAULT_T
     await update.message.reply_text(f"📝 *Transcripción:*\n_{texto}_", parse_mode="Markdown")
     return await procesar_respuesta(update, context, texto)
 
+
 async def handle_respuesta_miniapp(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     try:
         data = json.loads(update.effective_message.web_app_data.data)
         if data.get("type") == "audio":
             await update.message.reply_text("🎙️ _Transcribiendo audio..._", parse_mode="Markdown")
-            mini_app_url = os.getenv("MINI_APP_URL","")
-            audio_b64 = data.get("audio_b64","")
+            mini_app_url = os.getenv("MINI_APP_URL", "")
+            audio_b64 = data.get("audio_b64", "")
             if mini_app_url and audio_b64:
-                r = requests.post(f"{mini_app_url}/transcribir", json={"audio_b64":audio_b64}, timeout=60)
+                r = requests.post(f"{mini_app_url}/transcribir", json={"audio_b64": audio_b64}, timeout=60)
                 if r.status_code == 200:
-                    texto = r.json().get("texto","")
+                    texto = r.json().get("texto", "")
                     await update.message.reply_text(f"📝 *Transcripción:*\n_{texto}_", parse_mode="Markdown")
                     return await procesar_respuesta(update, context, f"{texto} [audio]")
             await update.message.reply_text("❌ No se pudo transcribir. Respondé en texto.")
@@ -518,30 +767,45 @@ async def handle_respuesta_miniapp(update: Update, context: ContextTypes.DEFAULT
         await update.message.reply_text("❌ Error procesando el audio.")
         return RESPONDIENDO_PREGUNTA
 
+
 async def procesar_respuesta(update, context, texto_respuesta: str) -> int:
     genero_key = context.user_data["genero"]
     flujo = obtener_flujo(genero_key)
     idx = context.user_data["pregunta_idx"]
     pregunta = flujo["preguntas"][idx]
+    clave = pregunta["clave"]
+    genero_nombre = GENEROS[genero_key]["nombre"]
+
     if len(texto_respuesta.strip()) < 3:
         await update.message.reply_text("📝 Necesito más información para continuar.")
         return RESPONDIENDO_PREGUNTA
+
+    # ¿Primera vez en esta pregunta? → evaluar repregunta
     if not context.user_data.get("repregunta_activa", False):
         await update.message.reply_text("🔎 _Analizando respuesta..._", parse_mode="Markdown")
-        analisis = analizar_respuesta_con_groq(pregunta["texto"], texto_respuesta)
+        analisis = analizar_respuesta_con_groq(pregunta["texto"], texto_respuesta, genero_nombre)
         if analisis.get("necesita_repregunta") and analisis.get("repregunta"):
-            context.user_data["respuestas"][pregunta["clave"]] = context.user_data["respuestas"].get(pregunta["clave"], "") + texto_respuesta
+            # Guardar respuesta inicial limpia
+            context.user_data["respuestas"][clave] = texto_respuesta.strip()
             context.user_data["repregunta_activa"] = True
             await update.message.reply_text(f"💬 {analisis['repregunta']}", parse_mode="Markdown")
             return RESPONDIENDO_PREGUNTA
-    if context.user_data.get("repregunta_activa", False):
-        clave = pregunta["clave"]
-        context.user_data["respuestas"][clave] = context.user_data["respuestas"].get(clave,"") + f"\n\n[Ampliación]: {texto_respuesta}"
+        else:
+            # Respuesta completa, sin repregunta
+            context.user_data["respuestas"][clave] = texto_respuesta.strip()
     else:
-        context.user_data["respuestas"][pregunta["clave"]] = texto_respuesta
+        # Es la ampliación tras una repregunta → concatenar de forma legible
+        respuesta_previa = context.user_data["respuestas"].get(clave, "").strip()
+        context.user_data["respuestas"][clave] = (
+            f"{respuesta_previa}\n\n[Ampliación]: {texto_respuesta.strip()}"
+        )
+        context.user_data["repregunta_activa"] = False
+
+    # Avanzar a la siguiente pregunta
     context.user_data["repregunta_activa"] = False
     context.user_data["pregunta_idx"] += 1
     idx_nuevo = context.user_data["pregunta_idx"]
+
     if idx_nuevo < len(flujo["preguntas"]):
         await update.message.reply_text(f"✓ Respuesta registrada ({idx_nuevo}/{len(flujo['preguntas'])})")
         await enviar_pregunta_actual(update.message, context)
@@ -552,11 +816,12 @@ async def procesar_respuesta(update, context, texto_respuesta: str) -> int:
         else:
             return await mostrar_resumen(update.message, context)
 
+
 async def iniciar_testimonios(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.update({
-        "testimonios":[],"testimonio_actual":{},"testimonio_paso":"nombre",
-        "fotos_testimonios":[],"consentimiento_fotos":None,
-        "esperando_fotos_testimonios":False,"esperando_ampliacion":False
+        "testimonios": [], "testimonio_actual": {}, "testimonio_paso": "nombre",
+        "fotos_testimonios": [], "consentimiento_fotos": None,
+        "esperando_fotos_testimonios": False, "esperando_ampliacion": False
     })
     await update.message.reply_text(
         "📢 *Testimonios (Reportaje)*\n\n"
@@ -568,7 +833,9 @@ async def iniciar_testimonios(update: Update, context: ContextTypes.DEFAULT_TYPE
     )
     return RECOLECTANDO_TESTIMONIOS
 
-async def handle_testimonio_texto(update: Update, context: ContextTypes.DEFAULT_TYPE, texto_alternativo: str = None) -> int:
+
+async def handle_testimonio_texto(update: Update, context: ContextTypes.DEFAULT_TYPE,
+                                   texto_alternativo: str = None) -> int:
     if context.user_data.get("esperando_ampliacion"):
         texto = texto_alternativo if texto_alternativo is not None else update.message.text.strip()
         context.user_data["ampliacion_info"] = "" if texto == "-" else texto
@@ -576,8 +843,8 @@ async def handle_testimonio_texto(update: Update, context: ContextTypes.DEFAULT_
         return await mostrar_resumen(update.message, context)
 
     texto = texto_alternativo if texto_alternativo is not None else update.message.text.strip()
-    paso = context.user_data.get("testimonio_paso","nombre")
-    actual = context.user_data.get("testimonio_actual",{})
+    paso = context.user_data.get("testimonio_paso", "nombre")
+    actual = context.user_data.get("testimonio_actual", {})
 
     if paso == "nombre":
         if not texto:
@@ -586,10 +853,12 @@ async def handle_testimonio_texto(update: Update, context: ContextTypes.DEFAULT_
         actual["nombre"] = texto
         context.user_data["testimonio_paso"] = "organizacion"
         await update.message.reply_text("📌 *Organización* (opcional — enviá '-' si no aplica):", parse_mode="Markdown")
+
     elif paso == "organizacion":
         actual["organizacion"] = "" if texto == "-" else texto
         context.user_data["testimonio_paso"] = "nacionalidad"
         await update.message.reply_text("🌎 *Nacionalidad* (obligatorio):", parse_mode="Markdown")
+
     elif paso == "nacionalidad":
         if not texto:
             await update.message.reply_text("La nacionalidad es obligatoria.")
@@ -597,10 +866,15 @@ async def handle_testimonio_texto(update: Update, context: ContextTypes.DEFAULT_
         actual["nacionalidad"] = texto
         context.user_data["testimonio_paso"] = "edad"
         await update.message.reply_text("🎂 *Edad* (opcional — enviá '-' si no querés decirla):", parse_mode="Markdown")
+
     elif paso == "edad":
         actual["edad"] = "" if texto == "-" else texto
         context.user_data["testimonio_paso"] = "pregunta1"
-        await update.message.reply_text("❓ *Primera pregunta (obligatoria)*\n\nFormulá la pregunta principal. Podés escribirla o enviar un audio.", parse_mode="Markdown")
+        await update.message.reply_text(
+            "❓ *Primera pregunta (obligatoria)*\n\nFormulá la pregunta principal. Podés escribirla o enviar un audio.",
+            parse_mode="Markdown"
+        )
+
     elif paso == "pregunta1":
         if len(texto) < 3:
             await update.message.reply_text("La pregunta es muy corta.")
@@ -608,38 +882,51 @@ async def handle_testimonio_texto(update: Update, context: ContextTypes.DEFAULT_
         actual["pregunta1"] = texto
         context.user_data["testimonio_paso"] = "pregunta2"
         await update.message.reply_text("❔ *Segunda pregunta (opcional — enviá '-' para saltar):*", parse_mode="Markdown")
+
     elif paso == "pregunta2":
         actual["pregunta2"] = "" if texto == "-" else texto
         context.user_data["testimonio_paso"] = "respuesta"
         await update.message.reply_text("💬 *Respuesta u opinión*\n\nMínimo 15 caracteres si es texto.", parse_mode="Markdown")
+
     elif paso == "respuesta":
         if len(texto) < 15:
             await update.message.reply_text("La respuesta es muy corta. Desarrollá más o enviá un audio.")
             return RECOLECTANDO_TESTIMONIOS
         actual["respuesta"] = texto
-        testimonios = context.user_data.get("testimonios",[])
+        testimonios = context.user_data.get("testimonios", [])
         testimonios.append({
-            "nombre":actual.get("nombre"),"organizacion":actual.get("organizacion",""),
-            "nacionalidad":actual.get("nacionalidad"),"edad":actual.get("edad",""),
-            "pregunta1":actual.get("pregunta1"),"pregunta2":actual.get("pregunta2",""),
-            "respuesta":actual.get("respuesta"),
+            "nombre": actual.get("nombre"), "organizacion": actual.get("organizacion", ""),
+            "nacionalidad": actual.get("nacionalidad"), "edad": actual.get("edad", ""),
+            "pregunta1": actual.get("pregunta1"), "pregunta2": actual.get("pregunta2", ""),
+            "respuesta": actual.get("respuesta"),
         })
         context.user_data["testimonios"] = testimonios
         context.user_data["testimonio_actual"] = {}
         cant = len(testimonios)
         if cant < 2:
             context.user_data["testimonio_paso"] = "nombre"
-            await update.message.reply_text(f"✅ Testimonio #{cant} guardado.\n\n✏️ *Nombre o alias del siguiente:*", parse_mode="Markdown")
+            await update.message.reply_text(
+                f"✅ Testimonio #{cant} guardado.\n\n✏️ *Nombre o alias del siguiente:*",
+                parse_mode="Markdown"
+            )
         elif cant == 2:
-            await update.message.reply_text(f"✅ Testimonio #{cant} guardado. Ya tenés los 2 mínimos.\n\n¿Querés agregar un tercero?", reply_markup=teclado_testimonio_opciones())
+            await update.message.reply_text(
+                f"✅ Testimonio #{cant} guardado. Ya tenés los 2 mínimos.\n\n¿Querés agregar un tercero?",
+                reply_markup=teclado_testimonio_opciones()
+            )
         elif cant >= 3:
-            await update.message.reply_text(f"✅ Testimonio #{cant} guardado. Alcanzaste el máximo.\n\n¿Las personas testimoniaron dieron consentimiento para ser fotografiadas?", reply_markup=teclado_consentimiento_fotos())
+            await update.message.reply_text(
+                f"✅ Testimonio #{cant} guardado. Alcanzaste el máximo.\n\n¿Las personas dieron consentimiento para ser fotografiadas?",
+                reply_markup=teclado_consentimiento_fotos()
+            )
+
     context.user_data["testimonio_actual"] = actual
     return RECOLECTANDO_TESTIMONIOS
 
+
 async def handle_testimonio_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    paso = context.user_data.get("testimonio_paso","")
-    if paso not in ["pregunta1","pregunta2","respuesta"]:
+    paso = context.user_data.get("testimonio_paso", "")
+    if paso not in ["pregunta1", "pregunta2", "respuesta"]:
         await update.message.reply_text("En este momento no se espera un audio. Respondé con texto.")
         return RECOLECTANDO_TESTIMONIOS
     voice = update.message.voice
@@ -659,29 +946,38 @@ async def handle_testimonio_audio(update: Update, context: ContextTypes.DEFAULT_
     await update.message.reply_text(f"📝 *Transcripción:*\n_{texto}_", parse_mode="Markdown")
     return await handle_testimonio_texto(update, context, texto)
 
+
 async def handle_testimonio_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
     data = query.data
+
     if data == "testimonio:agregar":
         context.user_data["testimonio_actual"] = {}
         context.user_data["testimonio_paso"] = "nombre"
         await query.message.reply_text("✏️ *Nombre o alias del tercer testimonio:*", parse_mode="Markdown")
         return RECOLECTANDO_TESTIMONIOS
+
     elif data == "testimonio:finalizar":
-        await query.message.reply_text("¿Las personas testimoniaron dieron consentimiento para ser fotografiadas?", reply_markup=teclado_consentimiento_fotos())
+        await query.message.reply_text(
+            "¿Las personas dieron consentimiento para ser fotografiadas?",
+            reply_markup=teclado_consentimiento_fotos()
+        )
         return RECOLECTANDO_TESTIMONIOS
+
     elif data == "fotos:si":
         context.user_data["consentimiento_fotos"] = True
         context.user_data["esperando_fotos_testimonios"] = True
         context.user_data.pop("testimonio_paso", None)
         context.user_data.pop("testimonio_actual", None)
-        num = len(context.user_data.get("testimonios",[]))
+        num = len(context.user_data.get("testimonios", []))
         await query.message.reply_text(
-            f"📸 Enviame una foto de cada una de las {num} personas que testimoniaron.\nCuando termines, escribí /listo.\n\n_Si alguien no quiere ser fotografiado, simplemente no envíes su foto._",
+            f"📸 Enviame una foto de cada una de las {num} personas que testimoniaron.\n"
+            f"Cuando termines, escribí /listo.\n\n_Si alguien no quiere ser fotografiado, simplemente no envíes su foto._",
             parse_mode="Markdown"
         )
         return ESPERANDO_FOTOS
+
     elif data == "fotos:no":
         context.user_data["consentimiento_fotos"] = False
         context.user_data["esperando_ampliacion"] = True
@@ -692,39 +988,54 @@ async def handle_testimonio_callback(update: Update, context: ContextTypes.DEFAU
             parse_mode="Markdown"
         )
         return RECOLECTANDO_TESTIMONIOS
+
     return RECOLECTANDO_TESTIMONIOS
+
 
 async def mostrar_resumen(message, context) -> int:
     genero_key = context.user_data["genero"]
     flujo = obtener_flujo(genero_key)
     testimonios = context.user_data.get("testimonios") if genero_key == "reportaje" else None
     resumen = construir_resumen(context.user_data["respuestas"], flujo, genero_key, testimonios)
-    await message.reply_text(resumen + "\n\n_Revisá tus respuestas antes de continuar._", parse_mode="Markdown", reply_markup=teclado_resumen())
+    await message.reply_text(
+        resumen + "\n\n_Revisá tus respuestas antes de continuar._",
+        parse_mode="Markdown", reply_markup=teclado_resumen()
+    )
     return REVISION_RESUMEN
+
 
 async def handle_revision_resumen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
     accion = query.data.split(":")[1]
+
     if accion == "confirmar":
         genero_key = context.user_data["genero"]
         fotos_min = GENEROS[genero_key]["fotos_min"]
         await query.edit_message_reply_markup(reply_markup=None)
         await query.message.reply_text(
-            f"✅ *Reporte confirmado.*\n\n📸 Enviame *al menos {fotos_min} foto{'s' if fotos_min > 1 else ''}* del hecho.\n"
+            f"✅ *Reporte confirmado.*\n\n"
+            f"📸 Enviame *al menos {fotos_min} foto{'s' if fotos_min > 1 else ''}* del hecho.\n"
             f"🎥 Opcionalmente, un video de hasta 30 segundos.\n\nCuando termines, escribí */generar*",
             parse_mode="Markdown"
         )
         context.user_data["esperando_fotos_testimonios"] = False
         return ESPERANDO_FOTOS
+
     elif accion == "editar":
         flujo = obtener_flujo(context.user_data["genero"])
         await query.edit_message_reply_markup(reply_markup=None)
-        await query.message.reply_text("✏️ *¿Qué respuesta querés editar?*\n\n_Tocá el número:_", parse_mode="Markdown", reply_markup=teclado_numeros(flujo))
+        await query.message.reply_text(
+            "✏️ *¿Qué respuesta querés editar?*\n\n_Tocá el número:_",
+            parse_mode="Markdown", reply_markup=teclado_numeros(flujo)
+        )
         return REVISION_RESUMEN
+
     elif accion == "volver":
         return await mostrar_resumen(query.message, context)
+
     return REVISION_RESUMEN
+
 
 async def handle_seleccion_editar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
@@ -734,18 +1045,22 @@ async def handle_seleccion_editar(update: Update, context: ContextTypes.DEFAULT_
     pregunta = flujo["preguntas"][idx]
     context.user_data["editando_idx"] = idx
     context.user_data["editando_clave"] = pregunta["clave"]
-    respuesta_actual = context.user_data["respuestas"].get(pregunta["clave"],"_Sin respuesta_")
+    respuesta_actual = context.user_data["respuestas"].get(pregunta["clave"], "_Sin respuesta_")
     if len(respuesta_actual) > 300:
         respuesta_actual = respuesta_actual[:300] + "..."
     await query.edit_message_reply_markup(reply_markup=None)
     await query.message.reply_text(
-        f"✏️ *Editando pregunta {idx+1}*\n\n{pregunta['texto']}\n\n_Respuesta actual:_\n{respuesta_actual}\n\n_Escribí la nueva respuesta o grabá un audio:_",
-        parse_mode="Markdown", reply_markup=construir_teclado_miniapp(pregunta["texto"], pregunta["clave"])
+        f"✏️ *Editando pregunta {idx+1}*\n\n{pregunta['texto']}\n\n"
+        f"_Respuesta actual:_\n{respuesta_actual}\n\n_Escribí la nueva respuesta o grabá un audio:_",
+        parse_mode="Markdown",
+        reply_markup=construir_teclado_miniapp(pregunta["texto"], pregunta["clave"])
     )
     return EDITANDO_RESPUESTA
 
+
 async def handle_edicion_texto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return await procesar_edicion(update, context, update.message.text)
+
 
 async def handle_edicion_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text("🎙️ _Transcribiendo audio..._", parse_mode="Markdown")
@@ -754,6 +1069,7 @@ async def handle_edicion_audio(update: Update, context: ContextTypes.DEFAULT_TYP
     await update.message.reply_text(f"📝 *Transcripción:*\n_{texto}_", parse_mode="Markdown")
     return await procesar_edicion(update, context, texto)
 
+
 async def procesar_edicion(update, context, texto_nuevo: str) -> int:
     if len(texto_nuevo.strip()) < 3:
         await update.message.reply_text("📝 La respuesta es muy corta.")
@@ -761,13 +1077,13 @@ async def procesar_edicion(update, context, texto_nuevo: str) -> int:
     clave = context.user_data.get("editando_clave")
     idx = context.user_data.get("editando_idx")
     if clave:
-        context.user_data["respuestas"][clave] = texto_nuevo
+        context.user_data["respuestas"][clave] = texto_nuevo.strip()
         await update.message.reply_text(f"✅ *Respuesta {idx+1} actualizada.*", parse_mode="Markdown")
     context.user_data.pop("editando_idx", None)
     context.user_data.pop("editando_clave", None)
     return await mostrar_resumen(update.message, context)
 
-# FIX: handle_foto con returns explícitos en todas las ramas
+
 async def handle_foto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     foto = update.message.photo[-1]
     if context.user_data.get("esperando_fotos_testimonios"):
@@ -775,10 +1091,10 @@ async def handle_foto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
             context.user_data["fotos_testimonios"] = []
         context.user_data["fotos_testimonios"].append(foto.file_id)
         recibidas = len(context.user_data["fotos_testimonios"])
-        necesarias = len(context.user_data.get("testimonios",[]))
+        necesarias = len(context.user_data.get("testimonios", []))
         if recibidas < necesarias:
             await update.message.reply_text(f"📸 Foto {recibidas} de {necesarias} recibida. Enviá la siguiente o /listo.")
-            return ESPERANDO_FOTOS  # explícito
+            return ESPERANDO_FOTOS
         else:
             await update.message.reply_text(f"✅ Recibidas las {necesarias} fotos de testimonios.")
             context.user_data["esperando_fotos_testimonios"] = False
@@ -787,7 +1103,7 @@ async def handle_foto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
                 "📝 *Información adicional*\n\n¿Hay algún dato relevante que quieras agregar? Podés escribirlo, o enviá '-' para saltar.",
                 parse_mode="Markdown"
             )
-            return RECOLECTANDO_TESTIMONIOS  # FIX: era ESPERANDO_FOTOS, ahora correcto
+            return RECOLECTANDO_TESTIMONIOS
     else:
         if "foto_ids" not in context.user_data:
             context.user_data["foto_ids"] = []
@@ -803,80 +1119,125 @@ async def handle_foto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         else:
             msg = f"📷 Foto {n} recibida ✓\n_Más fotos, video, o /generar_"
         await update.message.reply_text(msg, parse_mode="Markdown")
-        return ESPERANDO_FOTOS  # explícito
+        return ESPERANDO_FOTOS
+
 
 async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     video = update.message.video
     duracion = video.duration if video.duration else 0
     if duracion > 30:
-        await update.message.reply_text(f"⚠️ *Video rechazado* — dura {duracion}s. Máximo 30 segundos.", parse_mode="Markdown")
+        await update.message.reply_text(
+            f"⚠️ *Video rechazado* — dura {duracion}s. Máximo 30 segundos.",
+            parse_mode="Markdown"
+        )
         return ESPERANDO_FOTOS
     context.user_data["video_id"] = video.file_id
     context.user_data["video_duracion"] = duracion
     fotos_min = GENEROS[context.user_data["genero"]]["fotos_min"]
-    fotos = context.user_data.get("fotos",0)
-    msg = f"🎥 Video recibido ✓ ({duracion}s)\n_{'Todavía necesitás ' + str(fotos_min-fotos) + ' foto(s) más antes de /generar' if fotos < fotos_min else 'Listo para /generar'}_"
+    fotos = context.user_data.get("fotos", 0)
+    msg = (
+        f"🎥 Video recibido ✓ ({duracion}s)\n"
+        f"_{'Todavía necesitás ' + str(fotos_min-fotos) + ' foto(s) más antes de /generar' if fotos < fotos_min else 'Listo para /generar'}_"
+    )
     await update.message.reply_text(msg, parse_mode="Markdown")
     return ESPERANDO_FOTOS
+
 
 async def cmd_generar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     genero_key = context.user_data.get("genero")
     if not genero_key:
-        await update.message.reply_text("⚠️ No hay género seleccionado.")
+        await update.message.reply_text("⚠️ No hay género seleccionado. Escribí /reiniciar para empezar.")
         return ConversationHandler.END
-    fotos_hecho_ids = context.user_data.get("foto_ids",[])
+
+    fotos_hecho_ids = context.user_data.get("foto_ids", [])
     fotos_min = GENEROS[genero_key]["fotos_min"]
     if len(fotos_hecho_ids) < fotos_min:
-        await update.message.reply_text(f"⚠️ Necesitás *al menos {fotos_min} foto{'s' if fotos_min > 1 else ''}* del hecho. Enviaste {len(fotos_hecho_ids)}.", parse_mode="Markdown")
+        await update.message.reply_text(
+            f"⚠️ Necesitás *al menos {fotos_min} foto{'s' if fotos_min > 1 else ''}* del hecho. "
+            f"Enviaste {len(fotos_hecho_ids)}.",
+            parse_mode="Markdown"
+        )
         return ESPERANDO_FOTOS
+
     if genero_key == "reportaje":
-        testimonios = context.user_data.get("testimonios",[])
+        testimonios = context.user_data.get("testimonios", [])
         if len(testimonios) < 2:
-            await update.message.reply_text("⚠️ Necesitás completar al menos 2 testimonios.")
+            await update.message.reply_text("⚠️ Necesitás completar al menos 2 testimonios. Escribí /reiniciar si querés empezar de nuevo.")
             return ConversationHandler.END
-        fotos_test_ids = context.user_data.get("fotos_testimonios",[])
+        fotos_test_ids = context.user_data.get("fotos_testimonios", [])
     else:
         testimonios = None
         fotos_test_ids = []
-    await update.message.reply_text("⏳ *Generando borrador...*", parse_mode="Markdown")
-    nombre = context.user_data.get("nombre","corresponsal")
+
+    await update.message.reply_text(
+        "⏳ *Generando borrador...*\n_Esto puede tardar unos segundos._",
+        parse_mode="Markdown"
+    )
+
+    nombre = context.user_data.get("nombre", "corresponsal")
     genero_nombre = GENEROS[genero_key]["nombre"]
     fotos_hecho_bytes = await descargar_fotos(fotos_hecho_ids, context.bot)
     fotos_test_bytes = await descargar_fotos(fotos_test_ids, context.bot) if fotos_test_ids else []
     todas_fotos = fotos_hecho_bytes + fotos_test_bytes
-    ampliacion = context.user_data.get("ampliacion_info","")
-    borrador = generar_borrador(context.user_data.get("respuestas",{}), nombre, genero_key, len(todas_fotos), testimonios=testimonios, ampliacion=ampliacion)
+    ampliacion = context.user_data.get("ampliacion_info", "")
+
+    borrador, exito = generar_borrador(
+        context.user_data.get("respuestas", {}), nombre, genero_key,
+        len(todas_fotos), testimonios=testimonios, ampliacion=ampliacion
+    )
+
+    # Comunicación de error clara al usuario
+    if not exito or not borrador:
+        await update.message.reply_text(MSG_ERROR_GENERAR, parse_mode="Markdown")
+        return ConversationHandler.END
+
     titulo = extraer_titulo(borrador)
     for i in range(0, len(borrador), 4000):
         await update.message.reply_text(borrador[i:i+4000])
+
     await update.message.reply_text("📧 _Enviando al equipo editorial..._", parse_mode="Markdown")
     video_bytes = None
     video_id = context.user_data.get("video_id")
     if video_id:
         video_bytes = await descargar_video(video_id, context.bot)
+
     enviado = enviar_con_resend(borrador, nombre, titulo, genero_nombre, todas_fotos, video_bytes)
     info = f"📎 Fotos: {len(todas_fotos)}"
     if video_bytes:
-        info += f"\n🎥 Video: {context.user_data.get('video_duracion',0)}s"
-    await update.message.reply_text(
-        f"✅ *{'Borrador enviado' if enviado else 'Borrador generado'}.*\n📰 {genero_nombre}\n👤 {nombre}\n{info}\n\n_Usá /reiniciar para un nuevo reporte_",
-        parse_mode="Markdown"
-    )
+        info += f"\n🎥 Video: {context.user_data.get('video_duracion', 0)}s"
+
+    if enviado:
+        await update.message.reply_text(
+            f"✅ *Borrador enviado.*\n📰 {genero_nombre}\n👤 {nombre}\n{info}\n\n_Usá /reiniciar para un nuevo reporte_",
+            parse_mode="Markdown"
+        )
+    else:
+        await update.message.reply_text(
+            f"✅ *Borrador generado* (no se pudo enviar el email automáticamente).\n"
+            f"📰 {genero_nombre}\n👤 {nombre}\n{info}\n\n"
+            f"El texto del borrador está más arriba. _Usá /reiniciar para un nuevo reporte._",
+            parse_mode="Markdown"
+        )
     return ConversationHandler.END
+
 
 async def cancelar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.clear()
-    await update.message.reply_text("Cancelado. /start para comenzar.", reply_markup=ReplyKeyboardRemove())
+    await update.message.reply_text("Cancelado. /comenzar para empezar de nuevo.", reply_markup=ReplyKeyboardRemove())
     return ConversationHandler.END
 
-# ===== MAIN =====
+
+# ═══════════════════════════════════════════════════════════════
+# MAIN — webhook + auto-pinger
+# ═══════════════════════════════════════════════════════════════
 
 def main():
     application = Application.builder().token(TOKEN).build()
 
     conv_handler = ConversationHandler(
         entry_points=[
-            CommandHandler("start", start),
+            CommandHandler("comenzar", comenzar),
+            CommandHandler("start", comenzar),       # respaldo silencioso del protocolo de Telegram
             CommandHandler("reiniciar", reiniciar),
         ],
         states={
@@ -911,16 +1272,16 @@ def main():
         fallbacks=[
             CommandHandler("cancelar", cancelar),
             CommandHandler("reiniciar", reiniciar),
+            CommandHandler("comenzar", comenzar),
             CommandHandler("generar", cmd_generar),
         ],
     )
 
-    # FIX: solo conv_handler + ayuda — sin duplicar CommandHandlers
     application.add_handler(conv_handler)
     application.add_handler(CommandHandler("ayuda", ayuda))
 
     async def health_check(request: Request) -> JSONResponse:
-        return JSONResponse({"status": "ok"})
+        return JSONResponse({"status": "ok", "service": "chatbot-rl", "ia": "gemini-2.5-pro"})
 
     async def webhook_endpoint(request: Request) -> PlainTextResponse:
         try:
@@ -955,12 +1316,11 @@ def main():
                 time.sleep(interval_seconds)
         thread = threading.Thread(target=pinger, daemon=True)
         thread.start()
-        logger.info(f"Auto-pinger iniciado (cada {interval_seconds}s en puerto {port})")  # FIX: paréntesis cerrado
+        logger.info(f"Auto-pinger iniciado (cada {interval_seconds}s en puerto {port})")
 
     async def start_app():
         await application.initialize()
         await set_webhook()
-        # FIX: ruta webhook con token literal, no como parámetro de path
         webhook_path = f"/webhook/{TOKEN}"
         starlette_app = Starlette(routes=[
             Route("/health", health_check, methods=["GET"]),
@@ -972,6 +1332,7 @@ def main():
 
     start_self_pinger(PORT, interval_seconds=240)
     asyncio.run(start_app())
+
 
 if __name__ == "__main__":
     main()
