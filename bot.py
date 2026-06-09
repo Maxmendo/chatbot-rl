@@ -350,10 +350,70 @@ GEMINI_SAFETY_SETTINGS = [
 ]
 
 
+def _intento_gemini(url: str, payload: dict):
+    """
+    Un único intento contra Gemini. Devuelve (texto, motivo_error, status_code).
+    status_code permite a la capa superior decidir si reintenta (503) o no (429).
+    """
+    try:
+        r = requests.post(url, json=payload, timeout=120)
+        status = r.status_code
+        try:
+            data = r.json()
+        except Exception:
+            return None, f"Respuesta no-JSON de Gemini (HTTP {status})", status
+
+        # Log de trazabilidad: qué modelo respondió realmente
+        if "modelVersion" in data:
+            logger.info(f"Gemini respondió con modelo: {data['modelVersion']}")
+
+        # 1) Bloqueo del PROMPT DE ENTRADA
+        prompt_feedback = data.get("promptFeedback", {})
+        block_reason = prompt_feedback.get("blockReason")
+        if block_reason:
+            return None, f"Prompt bloqueado por Gemini (blockReason={block_reason})", status
+
+        # 2) Error explícito de la API
+        if "error" in data:
+            msg = data["error"].get("message", "desconocido")
+            return None, f"Error API Gemini (HTTP {status}): {msg}", status
+
+        # 3) Sin candidates
+        candidates = data.get("candidates", [])
+        if not candidates:
+            return None, "Gemini no devolvió candidates", status
+
+        candidate = candidates[0]
+        finish_reason = candidate.get("finishReason", "")
+        content = candidate.get("content", {})
+        parts = content.get("parts", [])
+        texto = parts[0].get("text", "").strip() if parts else ""
+
+        # 4) Evaluar finishReason
+        if finish_reason == "SAFETY":
+            return None, "Respuesta bloqueada por filtros de seguridad (finishReason=SAFETY)", status
+        if finish_reason == "RECITATION":
+            return None, "Respuesta bloqueada por recitación (finishReason=RECITATION)", status
+        if finish_reason == "MAX_TOKENS" and not texto:
+            return None, "Se agotaron los tokens sin generar texto (finishReason=MAX_TOKENS)", status
+
+        if texto:
+            return texto, None, status
+
+        return None, f"Gemini devolvió texto vacío (finishReason={finish_reason or 'desconocido'})", status
+
+    except requests.exceptions.Timeout:
+        return None, "Timeout llamando a Gemini", 0
+    except Exception as e:
+        return None, f"Excepción llamando a Gemini: {e}", 0
+
+
 def llamar_gemini(prompt_sistema: str, prompt_usuario: str, max_tokens: int = 8000):
     """
     Llama a Gemini (modelo configurable). Devuelve (texto, motivo_error).
-    Maneja: bloqueo de prompt, finishReason SAFETY/MAX_TOKENS, candidates vacíos.
+    - 503 ServiceUnavailable (sobrecarga temporal de Google): reintenta UNA vez tras una espera.
+    - 429 TooManyRequests (límite de cuota): NO reintenta — sería gastar cuota en vano.
+      Cae directo al fallback de Groq en la capa superior.
     """
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
@@ -375,55 +435,21 @@ def llamar_gemini(prompt_sistema: str, prompt_usuario: str, max_tokens: int = 80
         },
     }
 
-    try:
-        r = requests.post(url, json=payload, timeout=120)
-        data = r.json()
+    # Primer intento
+    texto, motivo, status = _intento_gemini(url, payload)
+    if texto:
+        return texto, None
 
-        # Log de trazabilidad: qué modelo respondió realmente
-        if "modelVersion" in data:
-            logger.info(f"Gemini respondió con modelo: {data['modelVersion']}")
-
-        # 1) Bloqueo del PROMPT DE ENTRADA
-        prompt_feedback = data.get("promptFeedback", {})
-        block_reason = prompt_feedback.get("blockReason")
-        if block_reason:
-            return None, f"Prompt bloqueado por Gemini (blockReason={block_reason})"
-
-        # 2) Error explícito de la API
-        if "error" in data:
-            msg = data["error"].get("message", "desconocido")
-            return None, f"Error API Gemini: {msg}"
-
-        # 3) Sin candidates
-        candidates = data.get("candidates", [])
-        if not candidates:
-            return None, "Gemini no devolvió candidates"
-
-        candidate = candidates[0]
-        finish_reason = candidate.get("finishReason", "")
-
-        # 4) Extraer texto si existe
-        content = candidate.get("content", {})
-        parts = content.get("parts", [])
-        texto = parts[0].get("text", "").strip() if parts else ""
-
-        # 5) Evaluar finishReason
-        if finish_reason == "SAFETY":
-            return None, "Respuesta bloqueada por filtros de seguridad (finishReason=SAFETY)"
-        if finish_reason == "RECITATION":
-            return None, "Respuesta bloqueada por recitación (finishReason=RECITATION)"
-        if finish_reason == "MAX_TOKENS" and not texto:
-            return None, "Se agotaron los tokens sin generar texto (finishReason=MAX_TOKENS)"
-
+    # 503: sobrecarga temporal de Google → reintento único con espera corta
+    if status == 503:
+        logger.warning("Gemini devolvió 503 (sobrecarga). Reintentando una vez en 4s...")
+        time.sleep(4)
+        texto, motivo, status = _intento_gemini(url, payload)
         if texto:
             return texto, None
 
-        return None, f"Gemini devolvió texto vacío (finishReason={finish_reason or 'desconocido'})"
-
-    except requests.exceptions.Timeout:
-        return None, "Timeout llamando a Gemini"
-    except Exception as e:
-        return None, f"Excepción llamando a Gemini: {e}"
+    # 429 o cualquier otro fallo: no reintentar, devolver el motivo
+    return None, motivo
 
 
 def _construir_prompt_usuario(respuestas: dict, nombre: str, genero_nombre: str, fotos: int,
