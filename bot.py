@@ -1,11 +1,13 @@
 """
-CHATBOT REFUGIO LATINOAMERICANO — bot.py v8
+CHATBOT REFUGIO LATINOAMERICANO — bot.py v9
 Géneros: Historia de vida, Denuncia, Reportaje
-IA: Gemini 2.5 Pro (borrador final) + Groq/Llama (repreguntas) + Groq/Whisper (transcripción)
+IA: Gemini (borrador final, modelo configurable) + Groq/Llama (repreguntas) + Groq/Whisper (transcripción)
 
 Variables de entorno:
   TELEGRAM_BOT_TOKEN   → token del bot
-  GEMINI_API_KEY       → generación de borradores (Gemini 2.5 Pro)
+  GEMINI_API_KEY       → generación de borradores
+  GEMINI_MODEL         → ID del modelo Gemini (default: gemini-3.5-flash)
+                         Para pasar a Pro cuando haya billing: gemini-3.1-pro-preview
   GROQ_API_KEY         → repreguntas (Llama 3.3) + transcripción audio (Whisper)
   RESEND_API_KEY       → envío de email al equipo editorial
   EDITORIAL_EMAIL      → destinatario del borrador
@@ -50,7 +52,10 @@ if not RENDER_EXTERNAL_URL:
     logger.error("RENDER_EXTERNAL_URL no configurada. El webhook no funcionará.")
 PORT = int(os.getenv("PORT", 8080))
 
-# Mensaje de error estándar (reutilizable)
+# Modelo Gemini configurable por entorno (free tier: gemini-3.5-flash; pago: gemini-3.1-pro-preview)
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
+
+# Mensaje de error estándar
 MSG_ERROR_GENERAR = (
     "⚠️ *No pude generar el borrador en este momento.*\n\n"
     "Puede ser un problema temporal del servicio de IA. "
@@ -144,7 +149,6 @@ def obtener_flujo(genero_key: str) -> dict:
         return FLUJO_DENUNCIA
     elif genero_key == "reportaje":
         return FLUJO_REPORTAJE
-    # Fallback defensivo (no debería ocurrir con solo 3 géneros)
     return FLUJO_DENUNCIA
 
 
@@ -249,7 +253,6 @@ def llamar_groq(messages: list, max_tokens: int = 400, temperature: float = 0.3,
         return None
 
 
-# Motor de repreguntas — mejorado para coherencia con el flujo
 PROMPT_ANALISTA = """Sos editor/a de campo de Refugio Latinoamericano, un medio de periodismo de migraciones con perspectiva de derechos humanos. Estás acompañando a un corresponsal mientras completa un cuestionario, pregunta por pregunta.
 
 Tu tarea: decidir si la respuesta del corresponsal a UNA pregunta específica necesita una repregunta para enriquecer el material periodístico.
@@ -275,7 +278,6 @@ Respondé EXCLUSIVAMENTE con un JSON válido, sin texto adicional:
 
 
 def analizar_respuesta_con_groq(pregunta: str, respuesta: str, genero_nombre: str = "") -> dict:
-    # Limpiar markdown de la pregunta para que el analista vea el texto real
     pregunta_limpia = re.sub(r'[*_]', '', pregunta).strip()
     contexto = f"GÉNERO PERIODÍSTICO: {genero_nombre}\n\n" if genero_nombre else ""
     resultado = llamar_groq(
@@ -293,11 +295,9 @@ def analizar_respuesta_con_groq(pregunta: str, respuesta: str, genero_nombre: st
     if resultado:
         try:
             parsed = json.loads(resultado)
-            # Validación de coherencia del JSON
             if not isinstance(parsed.get("necesita_repregunta"), bool):
                 return {"necesita_repregunta": False, "tipo": None, "repregunta": None}
             if parsed["necesita_repregunta"] and not parsed.get("repregunta"):
-                # Dice que necesita repregunta pero no la formuló → no repreguntar
                 return {"necesita_repregunta": False, "tipo": None, "repregunta": None}
             return parsed
         except Exception as e:
@@ -305,10 +305,14 @@ def analizar_respuesta_con_groq(pregunta: str, respuesta: str, genero_nombre: st
     return {"necesita_repregunta": False, "tipo": None, "repregunta": None}
 
 
+# Marcador de transcripción fallida (centralizado para detección)
+ERROR_TRANSCRIPCION = "[Error al transcribir. Respondé en texto.]"
+
+
 async def transcribir_audio_groq(file_id: str, bot) -> str:
     api_key = os.getenv("GROQ_API_KEY")
     if not api_key:
-        return "[Error: falta GROQ_API_KEY]"
+        return ERROR_TRANSCRIPCION
     try:
         file = await bot.get_file(file_id)
         audio_bytes = await file.download_as_bytearray()
@@ -321,20 +325,23 @@ async def transcribir_audio_groq(file_id: str, bot) -> str:
             timeout=60
         )
         data = response.json()
-        if "text" in data:
+        if "text" in data and data["text"].strip():
             return f"{data['text'].strip()} [transcripto de audio]"
-        return "[No se pudo transcribir. Respondé en texto.]"
+        return ERROR_TRANSCRIPCION
     except Exception as e:
         logger.error(f"Error transcripción: {e}")
-        return "[Error al transcribir. Respondé en texto.]"
+        return ERROR_TRANSCRIPCION
+
+
+def transcripcion_fallida(texto: str) -> bool:
+    """Detecta si una transcripción falló (para no guardarla como respuesta)."""
+    return texto.strip() == ERROR_TRANSCRIPCION or texto.startswith("[Error")
 
 
 # ═══════════════════════════════════════════════════════════════
-# GEMINI 2.5 PRO — generación de borradores (robusto, anti-bloqueo)
+# GEMINI — generación de borradores (robusto, anti-bloqueo)
 # ═══════════════════════════════════════════════════════════════
 
-# Umbrales bajos: el contenido de DDHH (violencia institucional, abuso, etc.)
-# es legítimo y los filtros por defecto bloquean material periodístico válido.
 GEMINI_SAFETY_SETTINGS = [
     {"category": "HARM_CATEGORY_HARASSMENT",        "threshold": "BLOCK_NONE"},
     {"category": "HARM_CATEGORY_HATE_SPEECH",       "threshold": "BLOCK_NONE"},
@@ -345,25 +352,26 @@ GEMINI_SAFETY_SETTINGS = [
 
 def llamar_gemini(prompt_sistema: str, prompt_usuario: str, max_tokens: int = 8000):
     """
-    Llama a Gemini 2.5 Pro. Devuelve una tupla (texto, motivo_error).
-    - Si todo sale bien: (texto, None)
-    - Si falla: (None, "motivo legible para logs")
+    Llama a Gemini (modelo configurable). Devuelve (texto, motivo_error).
     Maneja: bloqueo de prompt, finishReason SAFETY/MAX_TOKENS, candidates vacíos.
     """
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         return None, "Falta GEMINI_API_KEY"
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key={api_key}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={api_key}"
 
     payload = {
         "system_instruction": {"parts": [{"text": prompt_sistema}]},
         "contents": [{"role": "user", "parts": [{"text": prompt_usuario}]}],
         "safetySettings": GEMINI_SAFETY_SETTINGS,
         "generationConfig": {
-            "maxOutputTokens": max_tokens,   # alto para que el razonamiento no ahogue la salida
-            "temperature": 0.6,              # más consistencia, menos reintentos
+            "maxOutputTokens": max_tokens,
+            "temperature": 0.6,
             "responseMimeType": "text/plain",
+            # thinkingLevel bajo: los borradores no requieren razonamiento profundo
+            # y así se controla el consumo de tokens (clave para el presupuesto).
+            "thinkingConfig": {"thinkingLevel": "low"},
         },
     }
 
@@ -371,7 +379,11 @@ def llamar_gemini(prompt_sistema: str, prompt_usuario: str, max_tokens: int = 80
         r = requests.post(url, json=payload, timeout=120)
         data = r.json()
 
-        # 1) Bloqueo del PROMPT DE ENTRADA (no hay candidates, viene promptFeedback)
+        # Log de trazabilidad: qué modelo respondió realmente
+        if "modelVersion" in data:
+            logger.info(f"Gemini respondió con modelo: {data['modelVersion']}")
+
+        # 1) Bloqueo del PROMPT DE ENTRADA
         prompt_feedback = data.get("promptFeedback", {})
         block_reason = prompt_feedback.get("blockReason")
         if block_reason:
@@ -403,7 +415,6 @@ def llamar_gemini(prompt_sistema: str, prompt_usuario: str, max_tokens: int = 80
         if finish_reason == "MAX_TOKENS" and not texto:
             return None, "Se agotaron los tokens sin generar texto (finishReason=MAX_TOKENS)"
 
-        # 6) Texto válido
         if texto:
             return texto, None
 
@@ -446,8 +457,8 @@ def _construir_prompt_usuario(respuestas: dict, nombre: str, genero_nombre: str,
 def generar_borrador(respuestas: dict, nombre: str, genero_key: str, fotos: int,
                      testimonios: list = None, ampliacion: str = ""):
     """
-    Genera el borrador con Gemini 2.5 Pro. Si Gemini falla, cae a Groq (gratis).
-    Devuelve (borrador, exito_bool). Si ambos fallan, borrador es None.
+    Genera el borrador con Gemini. Si Gemini falla, cae a Groq.
+    Devuelve (borrador, exito_bool).
     """
     prompt_sistema = obtener_prompt(genero_key)
     genero_nombre = GENEROS[genero_key]["nombre"]
@@ -455,14 +466,12 @@ def generar_borrador(respuestas: dict, nombre: str, genero_key: str, fotos: int,
     prompt_sistema_completo = prompt_sistema + instruccion
     prompt_usuario = _construir_prompt_usuario(respuestas, nombre, genero_nombre, fotos, testimonios, ampliacion)
 
-    # Intento principal: Gemini
     texto, motivo_error = llamar_gemini(prompt_sistema_completo, prompt_usuario, max_tokens=8000)
     if texto:
         return texto, True
 
     logger.warning(f"Gemini no generó borrador ({motivo_error}). Probando fallback Groq.")
 
-    # Fallback: Groq (no consume presupuesto de Gemini)
     resultado_groq = llamar_groq(
         messages=[
             {"role": "system", "content": prompt_sistema_completo},
@@ -636,12 +645,19 @@ def enviar_con_resend(borrador: str, nombre: str, titulo: str, genero_nombre: st
         return False
 
 
+# Validaciones de testimonios
+NEGACIONES = {"no", "no.", "no hay", "ninguno", "ninguna", "nada", "-", "n/a", "na"}
+
+
+def es_negacion(texto: str) -> bool:
+    return texto.strip().lower() in NEGACIONES
+
+
 # ═══════════════════════════════════════════════════════════════
 # HANDLERS
 # ═══════════════════════════════════════════════════════════════
 
 async def comenzar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Punto de entrada principal. /comenzar y /start llevan acá."""
     context.user_data.clear()
     await update.message.reply_text(
         "Hola. Soy el *Chatbot - Refugio Latinoamericano*.\n\n🔐 Ingresá la contraseña de acceso:",
@@ -743,6 +759,13 @@ async def handle_respuesta_audio(update: Update, context: ContextTypes.DEFAULT_T
     await update.message.reply_text("🎙️ _Transcribiendo audio..._", parse_mode="Markdown")
     voice = update.message.voice or update.message.audio
     texto = await transcribir_audio_groq(voice.file_id, context.bot)
+    # Si falló la transcripción, NO guardar el error como respuesta
+    if transcripcion_fallida(texto):
+        await update.message.reply_text(
+            "⚠️ No pude transcribir ese audio. Probá grabarlo de nuevo (hablá un poco más fuerte y claro) "
+            "o escribí la respuesta en texto."
+        )
+        return RESPONDIENDO_PREGUNTA
     await update.message.reply_text(f"📝 *Transcripción:*\n_{texto}_", parse_mode="Markdown")
     return await procesar_respuesta(update, context, texto)
 
@@ -758,8 +781,9 @@ async def handle_respuesta_miniapp(update: Update, context: ContextTypes.DEFAULT
                 r = requests.post(f"{mini_app_url}/transcribir", json={"audio_b64": audio_b64}, timeout=60)
                 if r.status_code == 200:
                     texto = r.json().get("texto", "")
-                    await update.message.reply_text(f"📝 *Transcripción:*\n_{texto}_", parse_mode="Markdown")
-                    return await procesar_respuesta(update, context, f"{texto} [audio]")
+                    if texto and texto.strip():
+                        await update.message.reply_text(f"📝 *Transcripción:*\n_{texto}_", parse_mode="Markdown")
+                        return await procesar_respuesta(update, context, f"{texto} [audio]")
             await update.message.reply_text("❌ No se pudo transcribir. Respondé en texto.")
             return RESPONDIENDO_PREGUNTA
     except Exception as e:
@@ -780,28 +804,25 @@ async def procesar_respuesta(update, context, texto_respuesta: str) -> int:
         await update.message.reply_text("📝 Necesito más información para continuar.")
         return RESPONDIENDO_PREGUNTA
 
-    # ¿Primera vez en esta pregunta? → evaluar repregunta
+    # Primera vez en esta pregunta → evaluar repregunta
     if not context.user_data.get("repregunta_activa", False):
         await update.message.reply_text("🔎 _Analizando respuesta..._", parse_mode="Markdown")
         analisis = analizar_respuesta_con_groq(pregunta["texto"], texto_respuesta, genero_nombre)
         if analisis.get("necesita_repregunta") and analisis.get("repregunta"):
-            # Guardar respuesta inicial limpia
             context.user_data["respuestas"][clave] = texto_respuesta.strip()
             context.user_data["repregunta_activa"] = True
             await update.message.reply_text(f"💬 {analisis['repregunta']}", parse_mode="Markdown")
             return RESPONDIENDO_PREGUNTA
         else:
-            # Respuesta completa, sin repregunta
             context.user_data["respuestas"][clave] = texto_respuesta.strip()
     else:
-        # Es la ampliación tras una repregunta → concatenar de forma legible
+        # Ampliación tras repregunta → concatenar legible
         respuesta_previa = context.user_data["respuestas"].get(clave, "").strip()
         context.user_data["respuestas"][clave] = (
             f"{respuesta_previa}\n\n[Ampliación]: {texto_respuesta.strip()}"
         )
         context.user_data["repregunta_activa"] = False
 
-    # Avanzar a la siguiente pregunta
     context.user_data["repregunta_activa"] = False
     context.user_data["pregunta_idx"] += 1
     idx_nuevo = context.user_data["pregunta_idx"]
@@ -847,8 +868,12 @@ async def handle_testimonio_texto(update: Update, context: ContextTypes.DEFAULT_
     actual = context.user_data.get("testimonio_actual", {})
 
     if paso == "nombre":
-        if not texto:
-            await update.message.reply_text("Necesito un nombre o alias.")
+        # Validación: el nombre no puede ser una negación ni demasiado corto
+        if not texto or es_negacion(texto) or len(texto) < 2:
+            await update.message.reply_text(
+                "Necesito un nombre o alias válido para identificar a quien testimonia. "
+                "Si querés proteger su identidad, podés usar un seudónimo (ej: 'Testigo 1', 'María')."
+            )
             return RECOLECTANDO_TESTIMONIOS
         actual["nombre"] = texto
         context.user_data["testimonio_paso"] = "organizacion"
@@ -860,15 +885,22 @@ async def handle_testimonio_texto(update: Update, context: ContextTypes.DEFAULT_
         await update.message.reply_text("🌎 *Nacionalidad* (obligatorio):", parse_mode="Markdown")
 
     elif paso == "nacionalidad":
-        if not texto:
-            await update.message.reply_text("La nacionalidad es obligatoria.")
+        if not texto or es_negacion(texto):
+            await update.message.reply_text("La nacionalidad es obligatoria. Indicá el país de origen de la persona.")
             return RECOLECTANDO_TESTIMONIOS
         actual["nacionalidad"] = texto
         context.user_data["testimonio_paso"] = "edad"
         await update.message.reply_text("🎂 *Edad* (opcional — enviá '-' si no querés decirla):", parse_mode="Markdown")
 
     elif paso == "edad":
-        actual["edad"] = "" if texto == "-" else texto
+        # Edad: vacía si es '-' o negación; si se da, debe contener un número
+        if texto == "-" or es_negacion(texto):
+            actual["edad"] = ""
+        elif re.search(r'\d', texto):
+            actual["edad"] = texto
+        else:
+            await update.message.reply_text("Si querés indicar la edad, ingresá un número (ej: 34). Si no, enviá '-'.")
+            return RECOLECTANDO_TESTIMONIOS
         context.user_data["testimonio_paso"] = "pregunta1"
         await update.message.reply_text(
             "❓ *Primera pregunta (obligatoria)*\n\nFormulá la pregunta principal. Podés escribirla o enviar un audio.",
@@ -876,15 +908,15 @@ async def handle_testimonio_texto(update: Update, context: ContextTypes.DEFAULT_
         )
 
     elif paso == "pregunta1":
-        if len(texto) < 3:
-            await update.message.reply_text("La pregunta es muy corta.")
+        if len(texto) < 5 or es_negacion(texto):
+            await update.message.reply_text("La pregunta es muy corta o no es válida. Formulá una pregunta concreta.")
             return RECOLECTANDO_TESTIMONIOS
         actual["pregunta1"] = texto
         context.user_data["testimonio_paso"] = "pregunta2"
         await update.message.reply_text("❔ *Segunda pregunta (opcional — enviá '-' para saltar):*", parse_mode="Markdown")
 
     elif paso == "pregunta2":
-        actual["pregunta2"] = "" if texto == "-" else texto
+        actual["pregunta2"] = "" if (texto == "-" or es_negacion(texto)) else texto
         context.user_data["testimonio_paso"] = "respuesta"
         await update.message.reply_text("💬 *Respuesta u opinión*\n\nMínimo 15 caracteres si es texto.", parse_mode="Markdown")
 
@@ -943,6 +975,11 @@ async def handle_testimonio_audio(update: Update, context: ContextTypes.DEFAULT_
         return RECOLECTANDO_TESTIMONIOS
     await update.message.reply_text("🎙️ _Transcribiendo audio..._", parse_mode="Markdown")
     texto = await transcribir_audio_groq(file_id, context.bot)
+    if transcripcion_fallida(texto):
+        await update.message.reply_text(
+            "⚠️ No pude transcribir ese audio. Probá grabarlo de nuevo o escribí la respuesta en texto."
+        )
+        return RECOLECTANDO_TESTIMONIOS
     await update.message.reply_text(f"📝 *Transcripción:*\n_{texto}_", parse_mode="Markdown")
     return await handle_testimonio_texto(update, context, texto)
 
@@ -1066,6 +1103,11 @@ async def handle_edicion_audio(update: Update, context: ContextTypes.DEFAULT_TYP
     await update.message.reply_text("🎙️ _Transcribiendo audio..._", parse_mode="Markdown")
     voice = update.message.voice or update.message.audio
     texto = await transcribir_audio_groq(voice.file_id, context.bot)
+    if transcripcion_fallida(texto):
+        await update.message.reply_text(
+            "⚠️ No pude transcribir ese audio. Probá grabarlo de nuevo o escribí la respuesta en texto."
+        )
+        return EDITANDO_RESPUESTA
     await update.message.reply_text(f"📝 *Transcripción:*\n_{texto}_", parse_mode="Markdown")
     return await procesar_edicion(update, context, texto)
 
@@ -1186,7 +1228,6 @@ async def cmd_generar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         len(todas_fotos), testimonios=testimonios, ampliacion=ampliacion
     )
 
-    # Comunicación de error clara al usuario
     if not exito or not borrador:
         await update.message.reply_text(MSG_ERROR_GENERAR, parse_mode="Markdown")
         return ConversationHandler.END
@@ -1281,7 +1322,7 @@ def main():
     application.add_handler(CommandHandler("ayuda", ayuda))
 
     async def health_check(request: Request) -> JSONResponse:
-        return JSONResponse({"status": "ok", "service": "chatbot-rl", "ia": "gemini-2.5-pro"})
+        return JSONResponse({"status": "ok", "service": "chatbot-rl", "modelo_gemini": GEMINI_MODEL})
 
     async def webhook_endpoint(request: Request) -> PlainTextResponse:
         try:
@@ -1302,6 +1343,7 @@ def main():
         await application.bot.set_webhook(url=webhook_url, drop_pending_updates=True)
         token_oculto = TOKEN[:10] + "***" + TOKEN[-4:] if len(TOKEN) > 14 else "***"
         logger.info(f"Webhook configurado en {render_url}/webhook/{token_oculto}")
+        logger.info(f"Modelo Gemini activo: {GEMINI_MODEL}")
 
     def start_self_pinger(port: int, interval_seconds: int = 240):
         def pinger():
