@@ -421,8 +421,10 @@ def _intento_gemini(url: str, payload: dict):
             return None, "Respuesta bloqueada por filtros de seguridad (finishReason=SAFETY)", status
         if finish_reason == "RECITATION":
             return None, "Respuesta bloqueada por recitación (finishReason=RECITATION)", status
-        if finish_reason == "MAX_TOKENS" and not texto:
-            return None, "Se agotaron los tokens sin generar texto (finishReason=MAX_TOKENS)", status
+        if finish_reason == "MAX_TOKENS":
+            # Texto cortado a mitad de camino: NO sirve aunque haya contenido parcial.
+            # Mejor caer al fallback que entregar una nota incompleta.
+            return None, "Salida truncada por límite de tokens (finishReason=MAX_TOKENS)", status
 
         if texto:
             return texto, None, status
@@ -435,9 +437,13 @@ def _intento_gemini(url: str, payload: dict):
         return None, f"Excepción llamando a Gemini: {e}", 0
 
 
-def llamar_gemini(prompt_sistema: str, prompt_usuario: str, max_tokens: int = 8000):
+def llamar_gemini(prompt_sistema: str, prompt_usuario: str, max_tokens: int = 24000):
     """
     Llama a Gemini (modelo configurable). Devuelve (texto, motivo_error).
+    - max_tokens alto (24000): en Gemini 3 los tokens de RAZONAMIENTO (thinking)
+      cuentan contra maxOutputTokens. Con thinkingLevel=high, el modelo puede usar
+      miles de tokens pensando antes de escribir; un límite bajo trunca la nota.
+      Solo se cobra lo efectivamente generado, así que el límite alto no cuesta más.
     - 503 ServiceUnavailable (sobrecarga temporal de Google): reintenta UNA vez tras una espera.
     - 429 TooManyRequests (límite de cuota): NO reintenta — sería gastar cuota en vano.
       Cae directo al fallback de Groq en la capa superior.
@@ -520,7 +526,7 @@ def generar_borrador(respuestas: dict, nombre: str, genero_key: str, fotos: int,
     prompt_sistema_completo = prompt_sistema + instruccion
     prompt_usuario = _construir_prompt_usuario(respuestas, nombre, genero_nombre, fotos, testimonios, ampliacion)
 
-    texto, motivo_error = llamar_gemini(prompt_sistema_completo, prompt_usuario, max_tokens=8000)
+    texto, motivo_error = llamar_gemini(prompt_sistema_completo, prompt_usuario, max_tokens=24000)
     if texto:
         return texto, True
 
@@ -531,7 +537,7 @@ def generar_borrador(respuestas: dict, nombre: str, genero_key: str, fotos: int,
             {"role": "system", "content": prompt_sistema_completo},
             {"role": "user", "content": prompt_usuario}
         ],
-        max_tokens=3000, temperature=0.7
+        max_tokens=6000, temperature=0.7
     )
     if resultado_groq:
         logger.info("Borrador generado con fallback Groq.")
