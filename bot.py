@@ -1249,9 +1249,10 @@ async def cmd_generar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     todas_fotos = fotos_hecho_bytes + fotos_test_bytes
     ampliacion = context.user_data.get("ampliacion_info", "")
 
-    borrador, exito = generar_borrador(
+    borrador, exito = await asyncio.to_thread(
+        generar_borrador,
         context.user_data.get("respuestas", {}), nombre, genero_key,
-        len(todas_fotos), testimonios=testimonios, ampliacion=ampliacion
+        len(todas_fotos), testimonios, ampliacion
     )
 
     if not exito or not borrador:
@@ -1350,11 +1351,36 @@ def main():
     async def health_check(request: Request) -> JSONResponse:
         return JSONResponse({"status": "ok", "service": "chatbot-rl", "modelo_gemini": GEMINI_MODEL})
 
+    # Deduplicación: Telegram reenvía updates si el webhook no responde rápido.
+    # Guardamos los últimos update_id procesados para descartar duplicados.
+    updates_procesados = set()
+    MAX_UPDATES_GUARDADOS = 1000
+
+    async def procesar_update_background(update: Update):
+        try:
+            await application.process_update(update)
+        except Exception as e:
+            logger.error(f"Error procesando update en background: {e}")
+
     async def webhook_endpoint(request: Request) -> PlainTextResponse:
         try:
             body = await request.json()
             update = Update.de_json(body, application.bot)
-            await application.process_update(update)
+
+            # Deduplicar: si Telegram reenvió este update, ignorarlo
+            if update.update_id in updates_procesados:
+                logger.warning(f"Update duplicado ignorado: {update.update_id}")
+                return PlainTextResponse("", status_code=200)
+            updates_procesados.add(update.update_id)
+            if len(updates_procesados) > MAX_UPDATES_GUARDADOS:
+                # Evitar crecimiento indefinido: limpiar los más viejos
+                exceso = len(updates_procesados) - MAX_UPDATES_GUARDADOS
+                for uid in sorted(updates_procesados)[:exceso]:
+                    updates_procesados.discard(uid)
+
+            # Responder 200 de inmediato y procesar en segundo plano,
+            # para que Telegram no reenvíe el update por timeout.
+            asyncio.create_task(procesar_update_background(update))
             return PlainTextResponse("", status_code=200)
         except Exception as e:
             logger.error(f"Error en webhook: {e}")
