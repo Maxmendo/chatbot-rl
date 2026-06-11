@@ -168,9 +168,27 @@ CRITERIOS EDITORIALES OBLIGATORIOS (aplican a todo lo que escribas):
 - Voz activa, oraciones cortas (<18 palabras), sin adjetivos innecesarios
 - Detalles concretos — transportar al lector a la escena
 
+PRESUNCIÓN DE INOCENCIA (obligatorio en hechos delictivos):
+- Mientras no exista condena firme, NUNCA afirmes la autoría de un delito como hecho consumado.
+- Usá siempre: "presunto/a responsable", "acusado/a de", "imputado/a por", "según testigos", "según la denuncia".
+- Está bien afirmar el HECHO (la persona fue asesinada, el hecho ocurrió) pero no la AUTORÍA sin atribución.
+- Esto aplica también a las citas destacadas y al desglose editorial.
+
+NO REPETIR (obligatorio):
+- El CUERPO no repite el contenido del LEAD: lo desarrolla con información nueva.
+- No repitas la misma idea o frase en distintos párrafos (ej: el reclamo de justicia se menciona una sola vez, donde más fuerza tenga).
+- Cada párrafo debe aportar información que no estaba antes.
+
+PROHIBIDO INVENTAR (regla absoluta, sin excepciones):
+- Las CITAS TEXTUALES (entre comillas) solo pueden ser frases que aparezcan LITERALMENTE en el reporte del corresponsal (texto escrito o transcripción de audio). Si una frase no está en el material, NO existe.
+- NUNCA fabriques declaraciones de personas reales (expertos, funcionarios, afectados). Si el reporte menciona a una persona u organización como fuente posible pero sin frase textual, referila de forma indirecta y sin comillas (ej: "el corresponsal señala que el CELS sigue el caso") o marcala como fuente a consultar en las notas al editor.
+- NUNCA inventes gestiones periodísticas que no ocurrieron (ej: "este medio intentó contactar a...", "se negaron a responder"). Solo mencioná un intento de contraste si el reporte lo indica explícitamente.
+- Si el material no tiene citas textuales, la nota se escribe sin comillas y lo señalás en NOTAS PARA EL EDITOR/A ("no hay citas textuales en el material; conviene recabar declaraciones").
+- Podés escribir con creatividad la prosa, el orden y el ritmo — pero cada dato, frase citada y hecho debe provenir del material aportado. Lo que falte: [VERIFICAR].
+
 FORMATO DE SALIDA OBLIGATORIO — tu respuesta tiene DOS PARTES, en este orden exacto:
 
-══════ PARTE 1: LA NOTA ══════
+*PARTE 1: LA NOTA*
 
 TÍTULO: (máximo 12 palabras, sin punto final, informativo)
 
@@ -190,11 +208,11 @@ Es una nota periodística lista para leer, no un documento por secciones.
 - Las citas textuales van integradas en la narración, con atribución clara.
 - Si un dato no está en el reporte del corresponsal, NO lo inventes: marcalo [VERIFICAR].)
 
-══════ PARTE 2: DESGLOSE EDITORIAL ══════
+*PARTE 2: DESGLOSE EDITORIAL*
 
 (Esta parte es para el equipo editorial, no se publica. Incluye exactamente estas cuatro secciones:)
 
-CITAS DESTACADAS: las 2-3 frases textuales más potentes del material (de la persona entrevistada, las personas afectadas o los testimonios), cada una con su atribución. Sirven para destacados, redes y bajadas alternativas.
+CITAS DESTACADAS: las 2-3 frases textuales más potentes del material (de la persona entrevistada, las personas afectadas o los testimonios), cada una con su atribución. SOLO frases que estén literalmente en el reporte — si no hay, escribí "No hay citas textuales en el material."
 
 VERIFICACIÓN PENDIENTE: lista de datos a verificar, cada uno con [VERIFICAR].
 
@@ -210,7 +228,7 @@ Para el CUERPO de la nota:
 - Extensión: 500-700 palabras.
 - Excepción a la pirámide invertida: el cuerpo sigue un orden CRONOLÓGICO (origen → motivos → tránsito → llegada → inserción laboral → presente → horizonte), siempre en párrafos corridos, sin subtítulos.
 - El LEAD presenta a la persona: quién es, de dónde viene, qué hace hoy — y el eje de su historia.
-- Incluí al menos una cita textual de la persona entrevistada, integrada en la narración.
+- Si el material incluye frases textuales de la persona entrevistada, integrá al menos una en la narración. Si NO hay frases textuales, no inventes ninguna: redactá sin comillas y señalalo en las notas al editor.
 - El cierre queda abierto: la historia continúa, no la resuelvas artificialmente.
 
 En NOTAS PARA EL EDITOR/A prestá especial atención a: consentimiento de la persona entrevistada y protección de identidad."""
@@ -223,7 +241,7 @@ Para el CUERPO de la nota:
 - Extensión: 400-600 palabras.
 - Pirámide invertida estricta. El LEAD responde qué situación se denuncia, quiénes la sufren, dónde y desde cuándo. El primer párrafo del cuerpo: cómo ocurre y quiénes son los responsables.
 - El desarrollo cubre, en párrafos corridos: responsables y marco normativo incumplido, gestiones previas y respuestas recibidas, impacto en la vida cotidiana mostrando también cómo las personas se organizan y responden, y qué esperan lograr.
-- Incluí al menos una cita textual de las personas afectadas, integrada y atribuida según cómo pidieron ser identificadas.
+- Si el material incluye frases textuales de las personas afectadas, integrá al menos una, atribuida según cómo pidieron ser identificadas. Si NO hay frases textuales en el material, no inventes ninguna: redactá sin comillas y señalalo en las notas al editor.
 - Si el corresponsal indicó que corresponde buscar contraste con la parte señalada, mencioná en la nota que se intentará obtener su palabra.
 
 En NOTAS PARA EL EDITOR/A prestá especial atención a: protección de identidades (por defecto si hay solicitantes de refugio o situación irregular), riesgo de represalia y contraste pendiente."""
@@ -236,7 +254,7 @@ Para el CUERPO de la nota:
 - Extensión: 500-700 palabras.
 - El LEAD presenta el tema y su relevancia actual para la comunidad migrante (qué pasa, a quiénes afecta, dónde, desde cuándo).
 - El desarrollo, en párrafos corridos: contexto histórico o estructural, cómo lo viven las personas y comunidades protagonistas, datos y evidencia con sus fuentes, tensiones y responsables institucionales, y cómo se organizan y responden las comunidades.
-- Integrá los TESTIMONIOS de fuentes externas como citas textuales dentro de la narración, con nombre (o alias), nacionalidad y organización si la hay. Los testimonios son la voz central del reportaje: usalos todos.
+- Integrá los TESTIMONIOS de fuentes externas dentro de la narración, con nombre (o alias), nacionalidad y organización si la hay. Los testimonios son la voz central del reportaje: usalos todos. Al citarlos entre comillas, usá las palabras TAL COMO figuran en el material — podés recortar, pero no reescribir ni embellecer lo que dijeron.
 - El cierre proyecta: hacia dónde va la situación y qué debería cambiar.
 
 En CITAS DESTACADAS priorizá las frases más potentes de los testimonios. En NOTAS PARA EL EDITOR/A: fuentes a contrastar, datos a verificar, protección de identidades."""
@@ -303,6 +321,8 @@ NO repreguntés si:
 Si repreguntás, la repregunta debe:
 - Empezar con un eco empático breve (parafraseo de lo que dijo el corresponsal).
 - Pedir SOLO lo que falta de ESTA pregunta, sin adelantarte a preguntas futuras del cuestionario.
+- Ser PERTINENTE al caso concreto: muchas preguntas enumeran categorías alternativas (ej: "autoridad estatal, institución pública, empresa, particular"). Son OPCIONES, no casilleros a completar. Si la respuesta ya identifica la categoría que aplica, NO pidas datos de las otras. Ejemplo: si el responsable señalado es un particular, no preguntes por empresas, cargos ni dependencias institucionales.
+- Ser sensible a la gravedad del caso: en hechos de violencia grave (crímenes, agresiones, abusos), repreguntá solo lo periodísticamente esencial, con tacto, sin pedir detalles morbosos ni datos irrelevantes para la nota.
 - Estar redactada en español rioplatense (voseo), tono cálido y profesional.
 - Ser una sola repregunta concreta, no una lista.
 
@@ -528,7 +548,11 @@ def generar_borrador(respuestas: dict, nombre: str, genero_key: str, fotos: int,
     """
     prompt_sistema = obtener_prompt(genero_key)
     genero_nombre = GENEROS[genero_key]["nombre"]
-    instruccion = "\n\nUSÁ ÚNICAMENTE la información proporcionada. NO inventes datos, nombres, fechas ni estadísticas. Si falta un dato, marcalo con [VERIFICAR]."
+    instruccion = (
+        "\n\nUSÁ ÚNICAMENTE la información proporcionada. NO inventes datos, nombres, fechas, estadísticas, "
+        "CITAS TEXTUALES ni declaraciones de ninguna persona. Toda frase entre comillas debe existir "
+        "literalmente en el reporte. Si falta un dato, marcalo con [VERIFICAR]."
+    )
     prompt_sistema_completo = prompt_sistema + instruccion
     prompt_usuario = _construir_prompt_usuario(respuestas, nombre, genero_nombre, fotos, testimonios, ampliacion)
 
