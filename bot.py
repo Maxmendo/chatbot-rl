@@ -174,66 +174,72 @@ FORMATO DE SALIDA OBLIGATORIO — tu respuesta tiene DOS PARTES, en este orden e
 
 TÍTULO: (máximo 12 palabras, sin punto final, informativo)
 
+AUTOR: (nombre completo del corresponsal, tal como figura en el reporte)
+
+SECCIÓN: (el género periodístico de la nota: Historia de vida / Denuncia / Reportaje)
+
 BAJADA: (2-3 oraciones que complementan el título)
 
-(Cuerpo de la nota: párrafos corridos, SIN subtítulos, SIN numeración, SIN rótulos.
+LEAD: (un párrafo que responde: qué, quién, cuándo y dónde)
+
+CUERPO:
+(Párrafos corridos, SIN subtítulos, SIN numeración, SIN rótulos.
 Es una nota periodística lista para leer, no un documento por secciones.
-- El primer párrafo (lead) responde: qué, quién, cuándo y dónde.
-- El segundo párrafo completa: cómo y por qué.
+- El primer párrafo del cuerpo completa el lead: cómo y por qué.
 - Después, desarrollo en orden de importancia decreciente (pirámide invertida).
 - Las citas textuales van integradas en la narración, con atribución clara.
 - Si un dato no está en el reporte del corresponsal, NO lo inventes: marcalo [VERIFICAR].)
 
 ══════ PARTE 2: DESGLOSE EDITORIAL ══════
 
-(Esta parte es para el equipo editorial, no se publica. Incluye:)
+(Esta parte es para el equipo editorial, no se publica. Incluye exactamente estas cuatro secciones:)
 
-CHECKLIST DE ELEMENTOS: la estructura del género desglosada por secciones rotuladas, indicando qué información del reporte cubre cada elemento y qué falta.
+CITAS DESTACADAS: las 2-3 frases textuales más potentes del material (de la persona entrevistada, las personas afectadas o los testimonios), cada una con su atribución. Sirven para destacados, redes y bajadas alternativas.
 
 VERIFICACIÓN PENDIENTE: lista de datos a verificar, cada uno con [VERIFICAR].
 
-ETIQUETAS SUGERIDAS: 3-5 etiquetas.
+NOTAS PARA EL EDITOR/A: consentimientos, protección de identidades, contraste pendiente, riesgos.
 
-NOTAS PARA EL EDITOR/A: consentimientos, protección de identidades, contraste pendiente, riesgos."""
+ETIQUETAS SUGERIDAS: 3-5 etiquetas."""
 
 PROMPT_HISTORIA_VIDA = PROMPT_BASE + """
 
-GÉNERO: HISTORIA DE VIDA (crónica biográfica)
+GÉNERO: HISTORIA DE VIDA (crónica biográfica) — en SECCIÓN escribí: Historia de vida
 
-Para LA NOTA (Parte 1):
-- Extensión del cuerpo: 500-700 palabras.
-- Excepción a la pirámide invertida: el cuerpo sigue un orden CRONOLÓGICO (origen → motivos → tránsito → llegada → inserción laboral → presente → horizonte), pero siempre en párrafos corridos, sin subtítulos.
-- El lead presenta a la persona: quién es, de dónde viene, qué hace hoy — y el eje de su historia.
+Para el CUERPO de la nota:
+- Extensión: 500-700 palabras.
+- Excepción a la pirámide invertida: el cuerpo sigue un orden CRONOLÓGICO (origen → motivos → tránsito → llegada → inserción laboral → presente → horizonte), siempre en párrafos corridos, sin subtítulos.
+- El LEAD presenta a la persona: quién es, de dónde viene, qué hace hoy — y el eje de su historia.
 - Incluí al menos una cita textual de la persona entrevistada, integrada en la narración.
 - El cierre queda abierto: la historia continúa, no la resuelvas artificialmente.
 
-Para el DESGLOSE EDITORIAL (Parte 2), el checklist cubre: identificación, origen, motivos, tránsito, llegada, inserción laboral, presente, horizonte."""
+En NOTAS PARA EL EDITOR/A prestá especial atención a: consentimiento de la persona entrevistada y protección de identidad."""
 
 PROMPT_DENUNCIA = PROMPT_BASE + """
 
-GÉNERO: DENUNCIA (nota de actualidad con perspectiva de derechos)
+GÉNERO: DENUNCIA (nota de actualidad con perspectiva de derechos) — en SECCIÓN escribí: Denuncia
 
-Para LA NOTA (Parte 1):
-- Extensión del cuerpo: 400-600 palabras.
-- Pirámide invertida estricta: el lead responde qué situación se denuncia, quiénes la sufren, dónde y desde cuándo. El segundo párrafo: cómo ocurre y quiénes son los responsables.
+Para el CUERPO de la nota:
+- Extensión: 400-600 palabras.
+- Pirámide invertida estricta. El LEAD responde qué situación se denuncia, quiénes la sufren, dónde y desde cuándo. El primer párrafo del cuerpo: cómo ocurre y quiénes son los responsables.
 - El desarrollo cubre, en párrafos corridos: responsables y marco normativo incumplido, gestiones previas y respuestas recibidas, impacto en la vida cotidiana mostrando también cómo las personas se organizan y responden, y qué esperan lograr.
 - Incluí al menos una cita textual de las personas afectadas, integrada y atribuida según cómo pidieron ser identificadas.
 - Si el corresponsal indicó que corresponde buscar contraste con la parte señalada, mencioná en la nota que se intentará obtener su palabra.
 
-Para el DESGLOSE EDITORIAL (Parte 2), el checklist cubre: naturaleza del problema, personas afectadas, identificación elegida, responsables, lugar y momento, gestiones previas, testimonios y pruebas, impacto, expectativas, contraste editorial. Prestá especial atención en NOTAS PARA EL EDITOR/A a: protección de identidades (por defecto si hay solicitantes de refugio o situación irregular) y riesgo de represalia."""
+En NOTAS PARA EL EDITOR/A prestá especial atención a: protección de identidades (por defecto si hay solicitantes de refugio o situación irregular), riesgo de represalia y contraste pendiente."""
 
 PROMPT_REPORTAJE = PROMPT_BASE + """
 
-GÉNERO: REPORTAJE (análisis en profundidad)
+GÉNERO: REPORTAJE (análisis en profundidad) — en SECCIÓN escribí: Reportaje
 
-Para LA NOTA (Parte 1):
-- Extensión del cuerpo: 500-700 palabras.
-- El lead presenta el tema y su relevancia actual para la comunidad migrante (qué pasa, a quiénes afecta, dónde, desde cuándo).
+Para el CUERPO de la nota:
+- Extensión: 500-700 palabras.
+- El LEAD presenta el tema y su relevancia actual para la comunidad migrante (qué pasa, a quiénes afecta, dónde, desde cuándo).
 - El desarrollo, en párrafos corridos: contexto histórico o estructural, cómo lo viven las personas y comunidades protagonistas, datos y evidencia con sus fuentes, tensiones y responsables institucionales, y cómo se organizan y responden las comunidades.
 - Integrá los TESTIMONIOS de fuentes externas como citas textuales dentro de la narración, con nombre (o alias), nacionalidad y organización si la hay. Los testimonios son la voz central del reportaje: usalos todos.
 - El cierre proyecta: hacia dónde va la situación y qué debería cambiar.
 
-Para el DESGLOSE EDITORIAL (Parte 2), el checklist cubre: tema central, contexto, protagonistas, datos y evidencia, tensiones, agencia, proyección, y un listado de los testimonios incluidos con sus datos. En NOTAS PARA EL EDITOR/A: fuentes a contrastar, datos a verificar, protección de identidades."""
+En CITAS DESTACADAS priorizá las frases más potentes de los testimonios. En NOTAS PARA EL EDITOR/A: fuentes a contrastar, datos a verificar, protección de identidades."""
 
 
 def obtener_prompt(genero_key: str) -> str:
